@@ -1,0 +1,8 @@
+The DejaVu fonts bundled here (DejaVuSans.ttf, DejaVuSans-Bold.ttf) are
+distributed under the DejaVu Fonts License, a permissive, freely
+redistributable license derived from the Bitstream Vera Fonts license.
+
+Full license text: https://dejavu-fonts.github.io/License.html
+
+These files are included so the service renders consistently on any operating
+system without relying on host-installed (system) fonts.
