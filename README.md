@@ -2,7 +2,7 @@
 
 A Python service that renders a weather display PNG for an OG 7.5" TRMNL e-ink
 panel (800 × 480, 2-bit / 4 grey levels). It periodically fetches the National
-Weather Service *digital DWML* forecast, parses it, and writes a high-quality
+Weather Service digital DWML forecast, parses it, and writes a high-quality
 timestamped image.
 
 *Strongly* inspired by the layout of [Today: Beautiful Weather](https://trmnl.com/recipes/270447)
@@ -23,9 +23,9 @@ with changes such as:
 - **Header** - large date on the left (the static location line is removed to
   free space); a small, de-emphasised "Updated" time on the right.
 - **Temperature graph** - the forecast temperature curve with HIGH / LOW
-  markers (value + time) and a small condition icon below each
+  markers (value + time) and a small weather condition icon below each
   hour's dot.
-- **Current conditions** - sourced from the **latest observed conditions** at
+- **Current conditions** - sourced from the latest observed conditions at
   the nearest station (falling back to the current forecast hour if the
   observation is unavailable). Left: large weather icon, temperature, and a
   condition label; right: a 2 × 2 box grid showing AQI, Precipitation Chance (forecast
@@ -36,8 +36,8 @@ with changes such as:
   distinct from rain); when no type is specified, a droplet icon is shown
   instead of a word.
 
-A rain or thunderstorm with a precipitation chance **below 40%** is presented as
-**cloudy** (icon and text) everywhere it appears - current conditions, the
+A rain or thunderstorm with a precipitation chance below 40% is presented as
+cloudy (icon and text) everywhere it appears - current conditions, the
 forecast strip, and the graph - since it probably won't precipitate. Snow,
 sleet, and ice are always shown as-is.
 
@@ -56,7 +56,7 @@ depend on host system fonts.
 ## Requirements
 
 - Python 3.10+
-- [uv](https://docs.astral.sh/uv/) **or** `pip` (both are documented below)
+- [uv](https://docs.astral.sh/uv/) or `pip` (both are documented below)
 - Dependencies: `Pillow`, `defusedxml`, `python-dotenv`
 
 The freely-licensed fonts are vendored in the package, so no system fonts are
@@ -108,7 +108,7 @@ uv run trmnl-nws-weather --webhook "https://usetrmnl.com/api/plugin_settings/<yo
 The output is a 2 bit, 800×480 PNG - well under TRMNL's 5 MB limit.
 To keep the panel current, run that command on a schedule (cron,
 Task Scheduler, systemd timer) - every 30 minutes is a good default. See the
-**[Runbook](docs/RUNBOOK.md)** for a scheduling and caching details.
+[Runbook](docs/RUNBOOK.md) for a scheduling and caching details.
 
 ## Other ways to run it
 
@@ -125,7 +125,7 @@ uv run trmnl-nws-weather --webserver --port 8080
 
 > For step-by-step operational instructions (setup, generating a PNG, running
 > the service, configuration, troubleshooting), see the
-> **[Runbook](docs/RUNBOOK.md)**.
+> [Runbook](docs/RUNBOOK.md).
 
 Images are written to `images/img_<lat>_<lon>_<unix-ts>.png` (e.g.
 `img_40.0404_-76.3042_1780590454.png`). A one-shot run prints a JSON result to
@@ -137,8 +137,8 @@ stdout (logs go to stderr):
 
 ### Caching
 
-A one-shot request is served from cache when an image for the **same
-coordinates** was generated within the last 15 minutes
+A one-shot request is served from cache when an image for the same
+coordinates was generated within the last 15 minutes
 (`TRMNL_CACHE_SECONDS`): the existing filename is returned with `"cached":
 true` and no fetch/render happens. Pass `--no-cache` to always render. Offline
 (`--xml`) renders bypass the cache. The location description is embedded in the
@@ -194,7 +194,7 @@ defaults.
 The NWS feed carries no air-quality data, so the AQI box is filled from a
 separate source:
 
-- **`open-meteo`** (default) - the free, **no-API-key**
+- **`open-meteo`** (default) - the free, no-API-key
   [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api).
   It returns the US EPA AQI for your configured latitude/longitude, so it just
   works for anyone.
@@ -202,13 +202,6 @@ separate source:
 - **Custom endpoint** - set `TRMNL_AQI_URL` to any URL that returns JSON shaped
   like `{"aqi": 42}` (for example, a local air-quality sensor). When set, it
   takes precedence over `TRMNL_AQI_PROVIDER`.
-
-> **Note on the graph window:** the current time is anchored at the left of the
-> graph, as the NWS digital DWML feed only provides *forward* hourly
-> data (it starts at the upcoming hour). A centred marker would leave the left
-> half of the graph permanently empty, so "now" is anchored at the left and the
-> full 18-hour forecast fills the window. Set `TRMNL_GRAPH_NOW_POSITION=0.5` if
-> a data source with historical hours is added later.
 
 ## Data source
 
