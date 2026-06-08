@@ -5,12 +5,24 @@ panel (800 × 480, 2-bit / 4 grey levels). It periodically fetches the National
 Weather Service *digital DWML* forecast, parses it, and writes a high-quality
 timestamped image.
 
+*Strongly* inspired by the layout of [Today: Beautiful Weather](https://trmnl.com/recipes/270447)
+with changes such as:
+
+- Utilizes the National Weather Service weather data (and therefore US-only, at the moment)
+- A larger day / date in the header
+- A forecast graph which always shows the start/end time and temperature, as well as the low/high
+- Forecasted weather conditions on the graph
+- AQI (Air Quality Index) display
+- The forecast details are shown for 6 hour intervals, allowing a 2 day glanceable summary
+
+![Example Image](docs/example.png)
+
 ## Layout
 
 - **Header** — large date on the left (the static location line is removed to
   free space); a small, de-emphasised "Updated" time on the right.
 - **Temperature graph** — the forecast temperature curve with HIGH / LOW
-  markers (value + time), a "NOW" marker, and a small condition icon below each
+  markers (value + time) and a small condition icon below each
   hour's dot.
 - **Current conditions** — sourced from the **latest observed conditions** at
   the nearest station (falling back to the current forecast hour if the
@@ -28,11 +40,7 @@ A rain or thunderstorm with a precipitation chance **below 40%** is presented as
 forecast strip, and the graph — since it probably won't precipitate. Snow,
 sleet, and ice are always shown as-is.
 
-The reference photo's outer double-line frame is intentionally omitted so the
-content fills the full panel.
-
-Both unit systems (Imperial °F / mph, Metric °C / km/h) and both polarities
-(black-on-white "light", white-on-black "dark") are supported.
+Both unit systems (Imperial °F / mph, Metric °C / km/h) and light and dark modes are supported.
 
 ### Rendering quality
 
@@ -41,22 +49,23 @@ and downscaled with LANCZOS resampling before being quantised to four grey
 levels. This antialiases text, the temperature curve, and the procedurally
 drawn icons so they stay crisp on the panel. The font (the freely-licensed
 **Inter** family, chosen to match the TRMNL reference design; DejaVu Sans is
-also bundled) is vendored in `trmnl_nws_weather/assets/fonts/` so rendering does not
+also bundled) is in `trmnl_nws_weather/assets/fonts/` so rendering does not
 depend on host system fonts.
 
 ## Requirements
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) **or** `pip` (both are documented below)
-- Dependencies: `Pillow`, `defusedxml`, `python-dotenv` (see [`pyproject.toml`](pyproject.toml) or [`requirements.txt`](requirements.txt) for details)
+- Dependencies: `Pillow`, `defusedxml`, `python-dotenv`
 
 The freely-licensed fonts are vendored in the package, so no system fonts are
 required and the only network access needed is outbound HTTPS to
-`forecast.weather.gov` (and, for AQI, `air-quality-api.open-meteo.com`).
+`forecast.weather.gov` (and, for AQI, `air-quality-api.open-meteo.com`) or
+user-provided AQI data source.
 
 ## Install
 
-The project works the same under either tool — pick one. Everywhere below you
+The project works using uv (prefered) or python/pip. Everywhere below you
 can swap `uv run trmnl-nws-weather …` for `python -m trmnl_nws_weather …`.
 
 ```bash
@@ -78,19 +87,27 @@ plugin: this tool renders the PNG and POSTs it straight to your device.
 1. In TRMNL, go to **Plugins → Webhook Image → Add to my plugins**, name the
    instance, and copy the private **webhook URL** it gives you (treat it like a
    password).
-2. Set your location and render + upload in one command:
+2. (Optional) Configure the .env environment variables file (see [.env.example](.env.example) for options)
+3. Set your location and render + upload in one command:
 
 ```bash
 # Render the current weather and POST it to your TRMNL webhook URL:
-uv run trmnl-nws-weather --once \
+uv run trmnl-nws-weather \
   --lat 40.0404 --lon -76.3042 \
   --webhook "https://usetrmnl.com/api/plugin_settings/<your-uuid>/image"
 ```
 
-The output is already 800×480 PNG, well under TRMNL's 5 MB / 12-uploads-per-hour
-limits. To keep the panel current, run that command on a schedule (cron,
-Task Scheduler, systemd timer) — every 30 minutes is a good default. See the
-**[Runbook](docs/RUNBOOK.md)** for a scheduling walk-through.
+If you have configured the latitude/longitude in the environment/.env file, you do not need to specify them
+on the command line.
+
+```bash
+uv run trmnl-nws-weather --webhook "https://usetrmnl.com/api/plugin_settings/<your-uuid>/image"
+```
+
+The output is a 2 bit, 800×480 PNG - well under TRMNL's 5 MB limit.
+To keep the panel current, run that command on a schedule (cron,
+Task Scheduler, systemd timer) - every 30 minutes is a good default. See the
+**[Runbook](docs/RUNBOOK.md)** for a scheduling and caching details.
 
 ## Other ways to run it
 
@@ -242,5 +259,5 @@ trmnl_nws_weather/
   units.py         # Imperial/Metric conversion + formatting
   utils.py         # utility functions
 assets/
-  fonts/           # vendored fonts (Inter, DejaVu Sans)
+  fonts/           # fonts (Inter, DejaVu Sans)
 ```
