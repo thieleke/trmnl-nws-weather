@@ -12,14 +12,15 @@ design/layout details see [`../README.md`](../README.md).
 
 On each run the service:
 
-1. Checks the cache: if an image for the same coordinates **and panel geometry**
-   was generated in the last 15 minutes, returns it (unless `--no-cache`) and
-   stops here.
+1. Checks the cache: if an image for the same coordinates, **panel geometry and
+   display options** was generated in the last 15 minutes, returns it (unless
+   `--no-cache`) and stops here.
 2. Fetches the NWS **digital DWML** hourly forecast for the configured point.
 3. Fetches the MapClick **JSON** current observation + worded forecast.
 4. Renders a monochrome PNG at the configured panel size and bit depth
    (800×480, 2-bit / 4 grey levels by default; the TRMNL X is 1872×1404, 4-bit).
-5. Writes it to `images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png`
+5. Writes it to
+   `images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<l|d>_<i|m>_<12|24>_<unix-ts>.png`
    and prints a JSON result.
 
 If the observation fetch fails, the render still succeeds using the current
@@ -100,8 +101,8 @@ The tool renders the PNG, then POSTs it as `Content-Type: image/png`.
 On success you'll see the upload logged and the usual JSON on stdout:
 
 ```text
-INFO Wrote img_40.0404_-76.3042_800_480_2_1780590454.png (Intercourse PA)
-INFO Uploading img_40.0404_-76.3042_800_480_2_1780590454.png (... bytes) to https://usetrmnl.com/...
+INFO Wrote img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png (Intercourse PA)
+INFO Uploading img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png (... bytes) to https://usetrmnl.com/...
 INFO Webhook response: 200 OK
 ```
 
@@ -136,11 +137,11 @@ Progress logs go to **stderr**; the result is printed to **stdout** as JSON:
 INFO Fetching forecast: https://forecast.weather.gov/MapClick.php?...FcstType=digitalDWML
 INFO Fetching observation: https://forecast.weather.gov/MapClick.php?...FcstType=json
 INFO Observed: Fair, 67.0°F at Intercourse, Lancaster Airport
-INFO Wrote img_40.0404_-76.3042_800_480_2_1780590454.png (Intercourse PA)
+INFO Wrote img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png (Intercourse PA)
 ```
 
 ```json
-{"filename": "img_40.0404_-76.3042_800_480_2_1780590454.png", "cached": false, "description": "Intercourse PA"}
+{"filename": "img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png", "cached": false, "description": "Intercourse PA"}
 ```
 
 The PNG is the file named by `"filename"` (under the output directory). On a
@@ -236,7 +237,7 @@ warning and the default is used instead.
 | `TRMNL_GRAPH_WINDOW_HOURS` | `18` | 1 to 720 | Temperature graph time span |
 | `TRMNL_GRAPH_NOW_POSITION` | `0.0` | 0.0 to 1.0 | "Now" position in graph (0 = left) |
 | `TRMNL_FORECAST_HOURS` | `6` | 1 to 240 | Columns in the forecast strip |
-| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same coordinates + panel geometry |
+| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same coordinates + geometry + display options |
 | `TRMNL_TIME_FORMAT` | `12` | `12` or `24` | Time format, 12 or 24 hour |
 | `TRMNL_CLEANUP_AGE_SECONDS` | `21600` | 0 to 604800 | Age of files to delete (seconds) |
 | `TRMNL_OUTPUT_DIR` | `images` | any path | Output directory |
@@ -316,7 +317,9 @@ aspect, centres it, and fills the remaining area with **whitespace framed by a
 double-line border**. The result fills the entire X display while the content
 proportions are unchanged. Any non-5:3 panel (within a small tolerance) gets the
 same framed treatment; a panel that *is* 5:3 (e.g. a 1600 × 960) fills edge to
-edge with no border. Implementation detail: see `render._finalize` /
+edge with no border. In **dark** mode the border is omitted — a bright white
+frame on the black letterbox is distracting, so the whitespace alone separates
+the content from the panel edge. Implementation detail: see `render._finalize` /
 `render._draw_border`.
 
 > **Bit depth is a panel capability, not just a quality knob.** 4-bit only
@@ -341,11 +344,15 @@ The NWS feed has no air-quality data, so the AQI box is filled separately:
 
 ## 6. Output format
 
-- **Path:** `images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png` —
-  coordinates to 4 decimals, then the panel geometry, then `unix-ts` = generation
-  time (seconds). E.g. `img_40.0404_-76.3042_800_480_2_1780590454.png` (OG) or
-  `img_40.0404_-76.3042_1872_1404_4_1780590454.png` (X). Including the geometry
-  keeps renders for different devices from colliding or sharing a cache entry.
+- **Path:**
+  `images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<l|d>_<i|m>_<12|24>_<unix-ts>.png` —
+  coordinates to 4 decimals, then the panel geometry, then the display options
+  (theme `l`/`d`, units `i`/`m`, time format `12`/`24`), then `unix-ts` =
+  generation time (seconds). E.g.
+  `img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png` (OG, light, imperial,
+  12-hour) or `img_40.0404_-76.3042_1872_1404_4_d_m_24_1780590454.png` (X, dark,
+  metric, 24-hour). Encoding every input that changes the pixels keeps renders
+  for different devices or settings from colliding or sharing a cache entry.
 - **Format:** PNG, palette mode, at the configured panel size and bit depth
   (800×480, **2-bit** / 4 grey levels by default; `--device x` → 1872×1404,
   **4-bit** / 16 levels), suitable for direct display on the TRMNL panel. A
@@ -353,13 +360,17 @@ The NWS feed has no air-quality data, so the AQI box is filled separately:
   The location is stored in the PNG `Description` text chunk.
 - **Result:** the one-shot command prints JSON to stdout —
   `{"filename": "...", "cached": true|false, "description": "..."}`.
-- **Caching:** a request for the same coordinates **and panel geometry** within
-  `TRMNL_CACHE_SECONDS` (default 900 s) returns the existing file with
-  `"cached": true`. The geometry is part of the cache key, so an OG render is
-  never served for an X request (and vice-versa). Use `--no-cache` to force a
-  fresh render. After each fresh render, files older than
-  `TRMNL_CLEANUP_AGE_SECONDS` (default 6 h) are pruned automatically (per
-  coordinates + geometry).
+- **Caching:** a request for the same coordinates, **panel geometry and display
+  options** within `TRMNL_CACHE_SECONDS` (default 900 s) returns the existing
+  file with `"cached": true`. Every input that changes the output is in the
+  cache key, so a render is never served for a request that would look different
+  (an OG vs an X panel, light vs dark, etc.). Use `--no-cache` to force a fresh
+  render. After each fresh render, files older than `TRMNL_CLEANUP_AGE_SECONDS`
+  (default 6 h) are pruned automatically (per coordinates + geometry + options).
+- **Hard cap:** before the age-based prune, the directory is trimmed to at most
+  **50,000** images total (across all coordinates/devices/settings), deleting
+  the oldest by timestamp regardless of age. This runs first so a directory that
+  has somehow grown huge can never slow the per-render cache lookups.
 - The `images/` directory is created automatically and is git-ignored.
 
 Verify a generated file:

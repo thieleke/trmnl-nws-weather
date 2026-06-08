@@ -50,6 +50,20 @@ def test_render_letterboxes_offaspect_panel(sample_forecast):
     # which is the brightest entry of the 2-bit ramp (palette index 3).
     px = img.load()
     assert px[0, 0] == 3
+    # The light-theme frame is drawn in the foreground (black, index 0) somewhere
+    # down the centre of the top letterbox band.
+    cx = img.size[0] // 2
+    assert any(px[cx, y] == 0 for y in range(180))
+
+
+def test_dark_mode_hides_letterbox_border(sample_forecast):
+    # In dark mode the frame would be a bright white line on the black letterbox;
+    # it is suppressed, so the top band is entirely background (black, index 0).
+    img = render.render(
+        sample_forecast, replace(Settings(), width=1872, height=1404, theme=Theme.DARK))
+    px = img.load()
+    cx = img.size[0] // 2
+    assert all(px[cx, y] == 0 for y in range(180))
 
 
 def test_render_4bit_depth(sample_forecast):

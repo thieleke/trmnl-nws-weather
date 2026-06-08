@@ -29,7 +29,7 @@ from PIL.Image import Resampling
 from PIL import ImageDraw
 
 from . import icons, sun, units
-from .config import Settings
+from .config import Settings, Theme
 from .models import CurrentObservation, Forecast, HourPoint, effective_sky
 from .theme import Palette, font
 from .utils import SUPERSAMPLING_FACTOR, format_clock, format_day_hour_label, format_hour_label
@@ -151,7 +151,12 @@ def _finalize(master: Image.Image, palette: Palette, settings: Settings) -> Imag
     canvas = Image.new("L", (target_w, target_h), palette.bg)
     ox, oy = (target_w - content_w) // 2, (target_h - content_h) // 2
     canvas.paste(content, (ox, oy))
-    _draw_border(canvas, palette, (ox, oy, ox + content_w, oy + content_h), scale)
+    # The frame is drawn in the foreground colour; in dark mode that is a bright
+    # white border around the content, which is distracting against the black
+    # letterbox, so it is suppressed there (the whitespace alone separates the
+    # content from the panel edge).
+    if settings.theme is not Theme.DARK:
+        _draw_border(canvas, palette, (ox, oy, ox + content_w, oy + content_h), scale)
     return _quantize(canvas, settings.bit_depth)
 
 

@@ -74,7 +74,9 @@ panel.
 When the target panel is not 5:3 (e.g. TRMNL X is 4:3), the content keeps its
 native 5:3 aspect ratio, is centred, and the surrounding whitespace is framed
 with a double-line border — so the image still fills the entire display without
-stretching or distorting the layout.
+stretching or distorting the layout. In dark mode the border is omitted (a
+bright frame on the black letterbox is distracting); the whitespace alone
+separates the content from the panel edge.
 
 ## Requirements
 
@@ -160,25 +162,34 @@ uv run trmnl-nws-weather --webserver --port 8080
 > [Runbook](docs/RUNBOOK.md).
 
 Images are written to
-`images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png` (e.g.
-`img_40.0404_-76.3042_800_480_2_1780590454.png`). The panel geometry is part of
-the name so renders for different devices never collide. A one-shot run prints a
-JSON result to stdout (logs go to stderr):
+`images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<l|d>_<i|m>_<12|24>_<unix-ts>.png`
+(e.g. `img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png`). After the panel
+geometry, the name encodes the display options that change the pixels — theme
+(`l`ight / `d`ark), units (`i`mperial / `m`etric), and time format (`12` / `24`)
+— so renders for different devices **or settings** never collide. A one-shot run
+prints a JSON result to stdout (logs go to stderr):
 
 ```json
-{"filename": "img_40.0404_-76.3042_800_480_2_1780590454.png", "cached": false, "description": "Intercourse PA"}
+{"filename": "img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png", "cached": false, "description": "Intercourse PA"}
 ```
 
 ### Caching
 
 A one-shot request is served from cache when an image for the same
-coordinates **and panel geometry** (width / height / bit depth) was generated
-within the last 15 minutes (`TRMNL_CACHE_SECONDS`): the existing filename is
-returned with `"cached": true` and no fetch/render happens. Because the cache
-key includes the geometry, an OG render is never served to an X request (and
-vice-versa). Pass `--no-cache` to always render. Offline (`--xml`) renders
-bypass the cache. The location description is embedded in the PNG metadata so
-cache hits can report it without re-fetching.
+coordinates, **panel geometry** (width / height / bit depth) **and display
+options** (theme / units / time format) was generated within the last 15 minutes
+(`TRMNL_CACHE_SECONDS`): the existing filename is returned with `"cached": true`
+and no fetch/render happens. Because the cache key includes every input that
+changes the output, a render is never served to a request that would look
+different (e.g. an OG vs an X panel, or light vs dark). Pass `--no-cache` to
+always render. Offline (`--xml`) renders bypass the cache. The location
+description is embedded in the PNG metadata so cache hits can report it without
+re-fetching.
+
+Old images are pruned after each render: first the directory is hard-capped to
+50,000 files total (oldest deleted regardless of age, so a huge backlog can't
+slow the cache lookup), then anything older than `TRMNL_CLEANUP_AGE_SECONDS`
+(default 6 h) is removed.
 
 ### CLI options
 
@@ -230,7 +241,7 @@ warning and the default is used instead.
 | `TRMNL_GRAPH_WINDOW_HOURS` | `18` | 1 to 720 | Temperature graph time span |
 | `TRMNL_GRAPH_NOW_POSITION` | `0.0` | 0.0 to 1.0 | "Now" position in the graph (0 = left) |
 | `TRMNL_FORECAST_HOURS` | `6` | 1 to 240 | Columns in the forecast strip |
-| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same coordinates + panel geometry |
+| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same coordinates + geometry + display options |
 | `TRMNL_CLEANUP_AGE_SECONDS` | `21600` | 0 to 604800 | Delete generated PNGs older than this |
 | `TRMNL_OUTPUT_DIR` | `images` | any path | Output directory |
 | `TRMNL_AQI_PROVIDER` | `open-meteo` | `open-meteo` or `none` | AQI source |

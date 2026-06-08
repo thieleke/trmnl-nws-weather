@@ -350,13 +350,20 @@ class Settings:
     def cache_tag(self) -> str:
         """The cache key embedded in generated image filenames.
 
-        Combines the coordinates with the panel geometry
-        (``<lat>_<lon>_<width>_<height>_<bit_depth>``) so renders for different
-        devices made close together in time do not collide or serve each other
-        from the cache.
+        Combines the coordinates with the panel geometry and the display options
+        that change the rendered pixels:
+        ``<lat>_<lon>_<width>_<height>_<bit_depth>_<l|d>_<i|m>_<12|24>``
+        (theme, units, time format).  Including every option that affects the
+        output means renders made close together in time for different
+        devices/settings do not collide or serve each other from the cache.
         """
+        # Compare by ``.value`` (not enum identity) so the codes are stable even
+        # if the enum classes are re-imported/reloaded.
+        theme = "d" if self.theme.value == Theme.DARK.value else "l"
+        units = "m" if self.units.value == Units.METRIC.value else "i"
         return (f"{self.coord_tag}"
-                f"_{self.width}_{self.height}_{self.bit_depth}")
+                f"_{self.width}_{self.height}_{self.bit_depth}"
+                f"_{theme}_{units}_{self.time_format.value}")
 
     @property
     def _coords(self) -> str:

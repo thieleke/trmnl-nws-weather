@@ -3,10 +3,12 @@
 Retrieves the NWS forecast and current observation, renders a monochrome PNG at
 the configured panel size and bit depth (2-bit 800x480 by default), and writes
 it to the configured images directory.  Generated files are named
-``img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png`` so they can be
-reused as a cache keyed on both the coordinates and the panel geometry (see
-:func:`render_once`); renders for different devices therefore never collide or
-serve each other from the cache.
+``img_<lat>_<lon>_<width>_<height>_<bit_depth>_<l|d>_<i|m>_<12|24>_<unix-ts>.png``
+so they can be reused as a cache keyed on the coordinates, the panel geometry,
+and the display options (theme, units, time format) — every input that changes
+the rendered pixels (see :func:`render_once` and :attr:`Settings.cache_tag`).
+Renders for different devices or settings therefore never collide or serve each
+other from the cache.
 """
 
 from __future__ import annotations
@@ -29,6 +31,11 @@ from .config import Settings
 log = logging.getLogger("trmnl_nws_weather")
 
 _DESCRIPTION_KEY = "Description"
+
+# Hard ceiling on the number of generated images kept in the output directory,
+# across all coordinates/devices/settings.  Enforced before the age-based prune
+# so a runaway directory can never grow large enough to slow the per-tag globs.
+MAX_CACHED_IMAGES = 50_000
 
 
 def _timestamp_of(path: Path) -> int | None:
@@ -62,6 +69,51 @@ def find_cached(output_dir: Path, cache_tag: str, now_ts: int,
         if best is None or ts > best[0]:
             best = (ts, path)
     return best[1] if best else None
+
+
+def cap_image_count(output_dir: Path, max_files: int = MAX_CACHED_IMAGES) -> int:
+    """Delete the oldest images so at most ``max_files`` remain in ``output_dir``.
+
+    This is a hard ceiling across *all* images in the directory (every
+    coordinate / device / setting), independent of their age.  It runs before
+    the age-based prune (:func:`cleanup_old_images`) so a directory that has
+    somehow grown huge is trimmed by a single count + sort rather than letting
+    the per-tag globs scan an unbounded number of files on every request.
+
+    Oldest is determined by the embedded generation timestamp (no per-file
+    ``stat`` for the common case), falling back to the modification time only
+    for any file whose name has no parseable timestamp.  Returns the number of
+    files removed.  Best-effort: a file that cannot be deleted is logged and
+    skipped.
+    """
+    if not output_dir.is_dir():
+        return 0
+    paths = list(output_dir.glob("img_*.png"))
+    excess = len(paths) - max_files
+    if excess <= 0:
+        return 0
+
+    def _age_key(path: Path) -> float:
+        ts = _timestamp_of(path)
+        if ts is not None:
+            return ts
+        try:  # unparseable name: fall back to mtime so it still sorts sensibly
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    paths.sort(key=_age_key)  # oldest first
+    removed = 0
+    for path in paths[:excess]:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as e:
+            log.warning("Could not delete cached image %s: %s", path.name, e)
+    if removed:
+        log.info("Image cache over %d; removed %d oldest image(s)",
+                 max_files, removed)
+    return removed
 
 
 def cleanup_old_images(output_dir: Path, cache_tag: str, now_ts: int,
@@ -163,7 +215,10 @@ def render_once(settings: Settings, *, xml_path: Path | None = None,
     image.save(out_path, format="PNG", optimize=True, bits=settings.bit_depth,
                pnginfo=meta)
     log.info("Wrote %s (%s)", out_path.name, forecast.location_name)
-    # Prune stale renders so the output directory does not grow without bound.
+    # Enforce the hard count ceiling first (cheap, whole-directory) so a huge
+    # backlog can never slow the per-tag age prune that follows.
+    cap_image_count(settings.output_dir, MAX_CACHED_IMAGES)
+    # Then prune stale renders so the output directory does not grow without bound.
     cleanup_old_images(settings.output_dir, settings.cache_tag, now_ts,
                        settings.cleanup_age_seconds)
     return {"filename": out_path.name, "cached": False,
