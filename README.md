@@ -11,7 +11,8 @@ with changes such as:
 - Utilizes the National Weather Service weather data (and therefore US-only, at the moment)
 - A larger day / date in the header
 - A forecast graph which always shows the start/end time and temperature, as well as the low/high
-- Forecasted weather conditions on the graph
+- Forecasted weather conditions are displayed below the graph
+- Forcast graph always has current time's next hour as first value, as a full 18 hours of data is shown
 - AQI (Air Quality Index) display
 - The forecast details are shown for 6 hour intervals, allowing a 2 day glanceable summary
 
@@ -19,25 +20,25 @@ with changes such as:
 
 ## Layout
 
-- **Header** — large date on the left (the static location line is removed to
+- **Header** - large date on the left (the static location line is removed to
   free space); a small, de-emphasised "Updated" time on the right.
-- **Temperature graph** — the forecast temperature curve with HIGH / LOW
+- **Temperature graph** - the forecast temperature curve with HIGH / LOW
   markers (value + time) and a small condition icon below each
   hour's dot.
-- **Current conditions** — sourced from the **latest observed conditions** at
+- **Current conditions** - sourced from the **latest observed conditions** at
   the nearest station (falling back to the current forecast hour if the
   observation is unavailable). Left: large weather icon, temperature, and a
   condition label; right: a 2 × 2 box grid showing AQI, Precipitation Chance (forecast
   POP), observed Humidity, and observed Wind.
-- **Forecast strip** — Six 6-hourly forecast points starting from the next 6-hour boundary: time, icon + temperature, and
+- **Forecast strip** - Six 6-hourly forecast points starting from the next 6-hour boundary: time, icon + temperature, and
   precipitation chance. The chance is prefixed with the specific type when the
-  feed gives one (T'Storm / Rain / Snow / Sleet / Ice — thunderstorms are kept
+  feed gives one (T'Storm / Rain / Snow / Sleet / Ice - thunderstorms are kept
   distinct from rain); when no type is specified, a droplet icon is shown
   instead of a word.
 
 A rain or thunderstorm with a precipitation chance **below 40%** is presented as
-**cloudy** (icon and text) everywhere it appears — current conditions, the
-forecast strip, and the graph — since it probably won't precipitate. Snow,
+**cloudy** (icon and text) everywhere it appears - current conditions, the
+forecast strip, and the graph - since it probably won't precipitate. Snow,
 sleet, and ice are always shown as-is.
 
 Both unit systems (Imperial °F / mph, Metric °C / km/h) and light and dark modes are supported.
@@ -60,25 +61,25 @@ depend on host system fonts.
 
 The freely-licensed fonts are vendored in the package, so no system fonts are
 required and the only network access needed is outbound HTTPS to
-`forecast.weather.gov` (and, for AQI, `air-quality-api.open-meteo.com`) or
-user-provided AQI data source.
+`forecast.weather.gov` (and, for AQI, `air-quality-api.open-meteo.com` or
+user-provided AQI data source).
 
 ## Install
 
 The project works using uv (prefered) or python/pip. Everywhere below you
-can swap `uv run trmnl-nws-weather …` for `python -m trmnl_nws_weather …`.
+can swap `uv run trmnl-nws-weather ...` for `python -m trmnl_nws_weather ...`.
 
 ```bash
-# Option A — uv (creates .venv and installs dependencies):
+# Option A - uv (creates .venv and installs dependencies):
 uv sync
 
-# Option B — pip / plain Python:
+# Option B - pip / plain Python:
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt  # or: pip install .  (also installs the CLI)
 ```
 
-## Quick start — send to TRMNL (most common)
+## Quick start - send to TRMNL (most common)
 
 The simplest way to get weather onto a panel is TRMNL's
 **[Webhook Image](https://help.trmnl.com/en/articles/13213669-webhook-image)**
@@ -166,7 +167,7 @@ PNG metadata so cache hits can report it without re-fetching.
 
 Settings come from environment variables (each prefixed `TRMNL_`), with defaults
 for the built-in Intercourse, PA point so the tool runs out of the box. The
-easiest way to set them is a `.env` file in the project root — copy the
+easiest way to set them is a `.env` file in the project root - copy the
 documented [`.env.example`](.env.example) (configured for a second city, Boring,
 Oregon) to `.env` and edit it. CLI flags override env vars, which override the
 defaults.
@@ -193,12 +194,12 @@ defaults.
 The NWS feed carries no air-quality data, so the AQI box is filled from a
 separate source:
 
-- **`open-meteo`** (default) — the free, **no-API-key**
+- **`open-meteo`** (default) - the free, **no-API-key**
   [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api).
   It returns the US EPA AQI for your configured latitude/longitude, so it just
   works for anyone.
-- **`none`** — disables the lookup; the AQI box shows `--`.
-- **Custom endpoint** — set `TRMNL_AQI_URL` to any URL that returns JSON shaped
+- **`none`** - disables the lookup; the AQI box shows `--`.
+- **Custom endpoint** - set `TRMNL_AQI_URL` to any URL that returns JSON shaped
   like `{"aqi": 42}` (for example, a local air-quality sensor). When set, it
   takes precedence over `TRMNL_AQI_PROVIDER`.
 
@@ -212,7 +213,7 @@ separate source:
 ## Data source
 
 National Weather Service MapClick, two endpoints for the same point (US and
-territories only — the NWS does not cover locations outside its area):
+territories only - the NWS does not cover locations outside its area):
 
 ```text
 # Hourly forecast (drives the graph and forecast strip):
@@ -225,7 +226,7 @@ https://forecast.weather.gov/MapClick.php?lat=<lat>&lon=<lon>&FcstType=json
 The JSON `currentobservation` block supplies the latest measured temperature,
 humidity, wind, and condition; `data.weather[1]` supplies the upcoming-period
 headline. AQI (the one value NWS does not provide) comes from Open-Meteo by
-default — see [Air Quality Index](#air-quality-index-aqi). Sample NWS responses
+default - see [Air Quality Index](#air-quality-index-aqi). Sample NWS responses
 are committed at `docs/MapClick.php.xml` and `docs/MapClick.json` for offline
 use:
 
