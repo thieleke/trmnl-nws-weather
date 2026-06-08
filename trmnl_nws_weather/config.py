@@ -58,6 +58,21 @@ class Theme(str, Enum):
     DARK = "dark"  # white text on a black background
 
 
+class Device(str, Enum):
+    """A TRMNL hardware preset selecting panel size and bit depth at once."""
+
+    OG = "og"  # original 7.5" panel: 800x480, 2-bit (4 grey levels)
+    X = "x"  # 1872x1404, 4-bit (16 grey levels)
+
+
+# Each device preset expands to (width, height, bit_depth).  When a device is
+# configured it overrides any individually-set width/height/bit_depth.
+DEVICE_SPECS: dict[Device, tuple[int, int, int]] = {
+    Device.OG: (800, 480, 2),
+    Device.X: (1872, 1404, 4),
+}
+
+
 # -----------------------------------------------------------------------
 # Environment variable helpers
 # -----------------------------------------------------------------------
@@ -124,6 +139,40 @@ def _env_float(key: str, low: float, high: float, default: float) -> float:
     return validate.validate_float(value, key, low, high, default)
 
 
+def _env_choice_int(key: str, choices: tuple[int, ...], default: int) -> int:
+    """Read and validate an integer environment variable against a fixed set.
+
+    Parses the raw string to int and delegates to
+    :func:`validate.validate_choice`.  Returns *default* on invalid input.
+    """
+    raw = _env(key, str(default))
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        log.warning("%s is not a valid integer %r; falling back to default (%s)",
+                    key, raw, default)
+        return default
+    return validate.validate_choice(value, key, choices, default)
+
+
+def _env_device(key: str) -> Device | None:
+    """Read an optional device preset from the environment.
+
+    Returns ``None`` when unset/empty (so individual width/height/bit-depth
+    apply) and on invalid input (after logging a warning).
+    """
+    raw = os.environ.get(key)
+    if not raw:
+        return None
+    try:
+        return Device(raw.lower())
+    except ValueError:
+        valid = ", ".join(member.value for member in Device)
+        log.warning("%s value %r is not valid (allowed: %s); ignoring",
+                    key, raw, valid)
+        return None
+
+
 def _env_enum(key: str, enum_class: type[Enum], default: Enum) -> Enum:
     """Read and validate an enum environment variable.
 
@@ -148,6 +197,17 @@ DEFAULT_LATITUDE = 40.0404
 DEFAULT_LONGITUDE = -76.3042
 DEFAULT_UNITS = Units.IMPERIAL
 DEFAULT_THEME = Theme.LIGHT
+# Output panel geometry and grey-ramp bit depth.  The default matches the OG
+# 7.5" TRMNL panel (800x480, 2-bit / 4 grey levels).  The layout is authored at
+# 800x480 and scaled to fit other sizes; non-5:3 panels are letterboxed with a
+# framed border (see render._finalize).
+DEFAULT_WIDTH = 800
+DEFAULT_HEIGHT = 480
+DEFAULT_BIT_DEPTH = 2
+# Allowed panel pixel range and monochrome bit depths.
+MIN_DIMENSION = 200
+MAX_DIMENSION = 4000
+ALLOWED_BIT_DEPTHS = (1, 2, 4, 8)
 DEFAULT_TIME_FORMAT = TimeFormat.TWELVE_HOUR
 DEFAULT_REFRESH_SECONDS = 30 * 60
 DEFAULT_GRAPH_WINDOW_HOURS = 18
@@ -189,6 +249,39 @@ class Settings:
     time_format: TimeFormat = field(  # type: ignore[assignment]
         default_factory=lambda: _env_enum("TRMNL_TIME_FORMAT", TimeFormat, DEFAULT_TIME_FORMAT)
     )
+    # Output panel pixel dimensions.  The 800x480 layout is scaled to fit; a
+    # panel that is not 5:3 (e.g. the 4:3 1872x1404) is centred and framed with a
+    # double-line border rather than distorted.
+    width: int = field(
+        default_factory=lambda: _env_int(
+            "TRMNL_WIDTH", MIN_DIMENSION, MAX_DIMENSION, DEFAULT_WIDTH)
+    )
+    height: int = field(
+        default_factory=lambda: _env_int(
+            "TRMNL_HEIGHT", MIN_DIMENSION, MAX_DIMENSION, DEFAULT_HEIGHT)
+    )
+    # Monochrome grey-ramp depth: 2-bit (4 levels) matches the OG panel; 4-bit
+    # (16 levels) renders smoother gradients on panels that support it.
+    bit_depth: int = field(
+        default_factory=lambda: _env_choice_int(
+            "TRMNL_BIT_DEPTH", ALLOWED_BIT_DEPTHS, DEFAULT_BIT_DEPTH)
+    )
+    # Optional hardware preset.  When set (CLI ``--device`` or ``TRMNL_DEVICE``),
+    # it expands to a fixed width/height/bit_depth and overrides any individually
+    # configured values (see :meth:`__post_init__`).
+    device: Device | None = field(
+        default_factory=lambda: _env_device("TRMNL_DEVICE")
+    )
+
+    def __post_init__(self) -> None:
+        # A device preset is a shortcut for a specific panel; applying it here
+        # means it wins over width/height/bit_depth regardless of where those
+        # came from (env or CLI).  ``frozen`` requires object.__setattr__.
+        if self.device is not None:
+            width, height, bit_depth = DEVICE_SPECS[self.device]
+            object.__setattr__(self, "width", width)
+            object.__setattr__(self, "height", height)
+            object.__setattr__(self, "bit_depth", bit_depth)
     # How often the service re-fetches the forecast and re-renders, in seconds.
     refresh_seconds: int = field(
         default_factory=lambda: _env_int(
@@ -217,7 +310,8 @@ class Settings:
             "TRMNL_FORECAST_HOURS", 1, 240, DEFAULT_FORECAST_HOURS)
     )
     # A freshly-requested image is served from cache if one exists for the same
-    # coordinates generated within this many seconds (unless --no-cache).
+    # coordinates and panel geometry (see Settings.cache_tag), generated within
+    # this many seconds (unless --no-cache).
     cache_seconds: int = field(
         default_factory=lambda: _env_int(
             "TRMNL_CACHE_SECONDS", 0, 86400, DEFAULT_CACHE_SECONDS)
@@ -248,9 +342,21 @@ class Settings:
 
     @property
     def coord_tag(self) -> str:
-        """The ``<lat>_<lon>`` fragment used in generated image filenames."""
+        """The ``<lat>_<lon>`` fragment of generated image filenames."""
         return (f"{_format_coordinate(self.latitude)}"
                 f"_{_format_coordinate(self.longitude)}")
+
+    @property
+    def cache_tag(self) -> str:
+        """The cache key embedded in generated image filenames.
+
+        Combines the coordinates with the panel geometry
+        (``<lat>_<lon>_<width>_<height>_<bit_depth>``) so renders for different
+        devices made close together in time do not collide or serve each other
+        from the cache.
+        """
+        return (f"{self.coord_tag}"
+                f"_{self.width}_{self.height}_{self.bit_depth}")
 
     @property
     def _coords(self) -> str:

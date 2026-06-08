@@ -1,9 +1,12 @@
 """The weather display service.
 
-Retrieves the NWS forecast and current observation, renders a 2-bit 800x480
-PNG, and writes it to the configured images directory.  Generated files are
-named ``img_<lat>_<lon>_<unix-ts>.png`` so they can be reused as a coordinate
-keyed cache (see :func:`render_once`).
+Retrieves the NWS forecast and current observation, renders a monochrome PNG at
+the configured panel size and bit depth (2-bit 800x480 by default), and writes
+it to the configured images directory.  Generated files are named
+``img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png`` so they can be
+reused as a cache keyed on both the coordinates and the panel geometry (see
+:func:`render_once`); renders for different devices therefore never collide or
+serve each other from the cache.
 """
 
 from __future__ import annotations
@@ -29,24 +32,30 @@ _DESCRIPTION_KEY = "Description"
 
 
 def _timestamp_of(path: Path) -> int | None:
-    """Extract the unix timestamp from an ``img_<lat>_<lon>_<ts>.png`` name."""
+    """Extract the trailing unix timestamp from a generated image filename.
+
+    The timestamp is always the last ``_``-separated field, so this works
+    regardless of how many fields (coordinates, panel geometry) precede it.
+    """
     try:
         return int(path.stem.rsplit("_", 1)[1])
     except (IndexError, ValueError):
         return None
 
 
-def find_cached(output_dir: Path, coord_tag: str, now_ts: int,
+def find_cached(output_dir: Path, cache_tag: str, now_ts: int,
                 window_seconds: int) -> Path | None:
-    """Return the most recent cached image for ``coord_tag`` within the window.
+    """Return the most recent cached image for ``cache_tag`` within the window.
 
-    A match is an ``img_<coord_tag>_<ts>.png`` file whose timestamp is within
-    ``window_seconds`` of ``now_ts``.  Returns None if there is no fresh image.
+    A match is an ``img_<cache_tag>_<ts>.png`` file whose timestamp is within
+    ``window_seconds`` of ``now_ts``.  ``cache_tag`` encodes both the
+    coordinates and the panel geometry, so a render only matches one made for
+    the same device.  Returns None if there is no fresh image.
     """
     if not output_dir.is_dir():
         return None
     best: tuple[int, Path] | None = None
-    for path in output_dir.glob(f"img_{coord_tag}_*.png"):
+    for path in output_dir.glob(f"img_{cache_tag}_*.png"):
         ts = _timestamp_of(path)
         if ts is None or abs(now_ts - ts) > window_seconds:
             continue
@@ -55,9 +64,9 @@ def find_cached(output_dir: Path, coord_tag: str, now_ts: int,
     return best[1] if best else None
 
 
-def cleanup_old_images(output_dir: Path, coord_tag: str, now_ts: int,
+def cleanup_old_images(output_dir: Path, cache_tag: str, now_ts: int,
                        max_age_seconds: int) -> int:
-    """Delete ``img_<coord_tag>_<ts>.png`` files older than ``max_age_seconds``.
+    """Delete ``img_<cache_tag>_<ts>.png`` files older than ``max_age_seconds``.
 
     Returns the number of files removed.  Best-effort: a file that cannot be
     deleted (e.g. removed concurrently) is logged and skipped.
@@ -65,7 +74,7 @@ def cleanup_old_images(output_dir: Path, coord_tag: str, now_ts: int,
     if not output_dir.is_dir():
         return 0
     removed = 0
-    for path in output_dir.glob(f"img_{coord_tag}_*.png"):
+    for path in output_dir.glob(f"img_{cache_tag}_*.png"):
         ts = _timestamp_of(path)
         if ts is None or now_ts - ts <= max_age_seconds:
             continue
@@ -101,7 +110,7 @@ def render_once(settings: Settings, *, xml_path: Path | None = None,
     now_ts = int(time.time())
 
     if use_cache and xml_path is None:
-        cached = find_cached(settings.output_dir, settings.coord_tag, now_ts,
+        cached = find_cached(settings.output_dir, settings.cache_tag, now_ts,
                              settings.cache_seconds)
         if cached is not None:
             log.info("Cache hit (<%ss): %s", settings.cache_seconds, cached.name)
@@ -145,15 +154,17 @@ def render_once(settings: Settings, *, xml_path: Path | None = None,
                           headline=headline)
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = settings.output_dir / f"img_{settings.coord_tag}_{now_ts}.png"
+    out_path = settings.output_dir / f"img_{settings.cache_tag}_{now_ts}.png"
     # Embed the location so cache hits can report it without re-fetching.
     meta = PngInfo()
     meta.add_text(_DESCRIPTION_KEY, forecast.location_name)
-    # optimize keeps the 2-bit PNG compact for transfer to the device.
-    image.save(out_path, format="PNG", optimize=True, bits=2, pnginfo=meta)
+    # optimize keeps the palette PNG compact for transfer to the device; bits
+    # packs the indices at the configured depth (2-bit by default).
+    image.save(out_path, format="PNG", optimize=True, bits=settings.bit_depth,
+               pnginfo=meta)
     log.info("Wrote %s (%s)", out_path.name, forecast.location_name)
     # Prune stale renders so the output directory does not grow without bound.
-    cleanup_old_images(settings.output_dir, settings.coord_tag, now_ts,
+    cleanup_old_images(settings.output_dir, settings.cache_tag, now_ts,
                        settings.cleanup_age_seconds)
     return {"filename": out_path.name, "cached": False,
             "description": forecast.location_name}
@@ -192,7 +203,7 @@ def run_webserver(settings: Settings, port: int) -> None:
             log.info("Request %s from %s", self.path, client_ip)
             if self.path == "/weather":
                 now_ts = int(time.time())
-                cached_path = find_cached(settings.output_dir, settings.coord_tag, now_ts, settings.cache_seconds)
+                cached_path = find_cached(settings.output_dir, settings.cache_tag, now_ts, settings.cache_seconds)
 
                 if cached_path is not None and cached_path.exists():
                     log.info("Serving cached image: %s", cached_path.name)

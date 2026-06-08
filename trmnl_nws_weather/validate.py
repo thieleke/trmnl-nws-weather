@@ -105,6 +105,25 @@ def validate_int(value: int, source: str, low: int, high: int,
 
 
 # -----------------------------------------------------------------------
+# Choice validation
+# -----------------------------------------------------------------------
+
+
+def validate_choice(value: int, source: str, choices: tuple[int, ...],
+                    default: int, *, fail_hard: bool = False) -> int:
+    """Validate that *value* is one of the allowed ``choices``."""
+    if value not in choices:
+        allowed = ", ".join(str(c) for c in choices)
+        msg = f"{source} value {value} is not allowed (choose from {allowed})"
+        if fail_hard:
+            print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        log.warning("%s; falling back to default (%s)", msg, default)
+        return default
+    return value
+
+
+# -----------------------------------------------------------------------
 # Float range validation
 # -----------------------------------------------------------------------
 

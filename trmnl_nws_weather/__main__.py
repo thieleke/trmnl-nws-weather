@@ -28,6 +28,7 @@ from dataclasses import replace
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from pathlib import Path
 
+from . import config
 from .config import Settings, Theme, TimeFormat, Units
 from .service import render_once, run_forever, run_webserver, upload_to_webhook
 from . import validate as _validate
@@ -78,6 +79,20 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="override theme (light|dark)")
     parser.add_argument("--time-format", choices=[f.value for f in TimeFormat], default=None,
                         help="override time format (12|24)")
+    parser.add_argument("--device", type=str.lower,
+                        choices=[d.value for d in config.Device], default=None,
+                        help="hardware preset: og (TRMNL OG, 800x480 2-bit) | "
+                             "x (TRMNL X, 1872x1404 4-bit); overrides "
+                             "--width/--height/--bit-depth")
+    parser.add_argument("--width", type=int, default=None,
+                        help=f"output panel width in px "
+                             f"({config.MIN_DIMENSION}-{config.MAX_DIMENSION}, default 800)")
+    parser.add_argument("--height", type=int, default=None,
+                        help=f"output panel height in px "
+                             f"({config.MIN_DIMENSION}-{config.MAX_DIMENSION}, default 480)")
+    parser.add_argument("--bit-depth", type=int, default=None,
+                        choices=config.ALLOWED_BIT_DEPTHS,
+                        help="monochrome grey-ramp depth (default 2 = 4 levels)")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="override the images output directory")
     parser.add_argument("--no-cache", action="store_true",
@@ -110,6 +125,22 @@ def main(argv: list[str] | None = None) -> int:
         overrides["time_format"] = TimeFormat(args.time_format)
     if args.output_dir:
         overrides["output_dir"] = args.output_dir
+    # A device preset expands to a fixed width/height/bit_depth and overrides
+    # the individual flags (applied in Settings.__post_init__).
+    if args.device:
+        overrides["device"] = config.Device(args.device)
+    # Panel geometry / bit depth: range-checked here so a bad CLI value fails
+    # hard (argparse already restricts --bit-depth to the allowed set).
+    if args.width is not None:
+        overrides["width"] = _validate.validate_int(
+            args.width, "--width", config.MIN_DIMENSION, config.MAX_DIMENSION,
+            config.DEFAULT_WIDTH, fail_hard=True)
+    if args.height is not None:
+        overrides["height"] = _validate.validate_int(
+            args.height, "--height", config.MIN_DIMENSION, config.MAX_DIMENSION,
+            config.DEFAULT_HEIGHT, fail_hard=True)
+    if args.bit_depth is not None:
+        overrides["bit_depth"] = args.bit_depth
 
     # Latitude and longitude only override the location when both are supplied.
     # The argparse --lat/--lon type already range-checks and truncates them.

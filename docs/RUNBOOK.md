@@ -1,7 +1,10 @@
 # Runbook — Generating the Weather PNG
 
-Operational guide for producing the 2-bit 800×480 weather PNG for the TRMNL
-7.5" e-ink display. For design/layout details see [`../README.md`](../README.md).
+Operational guide for producing the weather PNG for a TRMNL e-ink display.
+Defaults to the TRMNL OG (2-bit 800×480) and also targets the TRMNL X (4-bit
+1872×1404) or any custom panel — see [§5 Configuration](#5-configuration) and
+the [panel geometry note](#panel-geometry-and-framing). For
+design/layout details see [`../README.md`](../README.md).
 
 ---
 
@@ -9,12 +12,15 @@ Operational guide for producing the 2-bit 800×480 weather PNG for the TRMNL
 
 On each run the service:
 
-1. Checks the cache: if an image for the same coordinates was generated in the
-   last 15 minutes, returns it (unless `--no-cache`) and stops here.
+1. Checks the cache: if an image for the same coordinates **and panel geometry**
+   was generated in the last 15 minutes, returns it (unless `--no-cache`) and
+   stops here.
 2. Fetches the NWS **digital DWML** hourly forecast for the configured point.
 3. Fetches the MapClick **JSON** current observation + worded forecast.
-4. Renders an 800×480, 2-bit (4 grey level) PNG.
-5. Writes it to `images/img_<lat>_<lon>_<unix-ts>.png` and prints a JSON result.
+4. Renders a monochrome PNG at the configured panel size and bit depth
+   (800×480, 2-bit / 4 grey levels by default; the TRMNL X is 1872×1404, 4-bit).
+5. Writes it to `images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png`
+   and prints a JSON result.
 
 If the observation fetch fails, the render still succeeds using the current
 forecast hour as a fallback.
@@ -90,12 +96,12 @@ To avoid repeating the URL, store it in `.env` as `TRMNL_WEBHOOK_URL` and call
 uv run trmnl-nws-weather --once --webhook
 ```
 
-The tool renders the 800×480 PNG, then POSTs it as `Content-Type: image/png`.
+The tool renders the PNG, then POSTs it as `Content-Type: image/png`.
 On success you'll see the upload logged and the usual JSON on stdout:
 
 ```text
-INFO Wrote img_40.0404_-76.3042_1780590454.png (Intercourse PA)
-INFO Uploading img_40.0404_-76.3042_1780590454.png (... bytes) to https://usetrmnl.com/...
+INFO Wrote img_40.0404_-76.3042_800_480_2_1780590454.png (Intercourse PA)
+INFO Uploading img_40.0404_-76.3042_800_480_2_1780590454.png (... bytes) to https://usetrmnl.com/...
 INFO Webhook response: 200 OK
 ```
 
@@ -130,11 +136,11 @@ Progress logs go to **stderr**; the result is printed to **stdout** as JSON:
 INFO Fetching forecast: https://forecast.weather.gov/MapClick.php?...FcstType=digitalDWML
 INFO Fetching observation: https://forecast.weather.gov/MapClick.php?...FcstType=json
 INFO Observed: Fair, 67.0°F at Intercourse, Lancaster Airport
-INFO Wrote img_40.0404_-76.3042_1780590454.png (Intercourse PA)
+INFO Wrote img_40.0404_-76.3042_800_480_2_1780590454.png (Intercourse PA)
 ```
 
 ```json
-{"filename": "img_40.0404_-76.3042_1780590454.png", "cached": false, "description": "Intercourse PA"}
+{"filename": "img_40.0404_-76.3042_800_480_2_1780590454.png", "cached": false, "description": "Intercourse PA"}
 ```
 
 The PNG is the file named by `"filename"` (under the output directory). On a
@@ -174,6 +180,12 @@ uv run trmnl-nws-weather --once --units metric
 # Dark theme (white on black):
 uv run trmnl-nws-weather --once --theme dark
 
+# Target the TRMNL X panel (1872×1404, 4-bit) via the device preset:
+uv run trmnl-nws-weather --once --device x
+
+# Or a custom panel size / bit depth directly:
+uv run trmnl-nws-weather --once --width 1024 --height 600 --bit-depth 4
+
 # Write somewhere else:
 uv run trmnl-nws-weather --once --output-dir /path/to/out
 ```
@@ -190,6 +202,10 @@ uv run trmnl-nws-weather --once --output-dir /path/to/out
 | `--units {imperial,metric}` | Override unit system |
 | `--theme {light,dark}` | Override theme |
 | `--time-format {12,24}` | Override time format |
+| `--device {og,x}` | Panel preset (TRMNL OG or X); overrides `--width`/`--height`/`--bit-depth` |
+| `--width INT` | Panel width in px, 200..4000 (default 800) |
+| `--height INT` | Panel height in px, 200..4000 (default 480) |
+| `--bit-depth {1,2,4,8}` | Monochrome grey-ramp depth (default 2 = 4 levels) |
 | `--output-dir PATH` | Override the images output directory |
 | `--no-cache` | Always render, ignoring any recent cached image |
 | `--webhook [URL]` | POST the generated image to a webhook URL and exit; the URL may be omitted when `TRMNL_WEBHOOK_URL` is set |
@@ -212,11 +228,15 @@ warning and the default is used instead.
 | `TRMNL_LONGITUDE` | `-76.3042` | -180 to 180 | Forecast point longitude |
 | `TRMNL_UNITS` | `imperial` | `imperial` or `metric` | `imperial` (°F/mph) or `metric` (°C/km/h) |
 | `TRMNL_THEME` | `light` | `light` or `dark` | `light` (black on white) or `dark` |
+| `TRMNL_DEVICE` | *(empty)* | `og` or `x` | Panel preset; overrides the three values below |
+| `TRMNL_WIDTH` | `800` | 200 to 4000 | Panel width in px |
+| `TRMNL_HEIGHT` | `480` | 200 to 4000 | Panel height in px |
+| `TRMNL_BIT_DEPTH` | `2` | `1`, `2`, `4`, or `8` | Monochrome grey-ramp depth (2 = 4 levels, 4 = 16) |
 | `TRMNL_REFRESH_SECONDS` | `1800` | 60 to 86400 | Service re-render interval |
 | `TRMNL_GRAPH_WINDOW_HOURS` | `18` | 1 to 720 | Temperature graph time span |
 | `TRMNL_GRAPH_NOW_POSITION` | `0.0` | 0.0 to 1.0 | "Now" position in graph (0 = left) |
 | `TRMNL_FORECAST_HOURS` | `6` | 1 to 240 | Columns in the forecast strip |
-| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same-coordinate requests |
+| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same coordinates + panel geometry |
 | `TRMNL_TIME_FORMAT` | `12` | `12` or `24` | Time format, 12 or 24 hour |
 | `TRMNL_CLEANUP_AGE_SECONDS` | `21600` | 0 to 604800 | Age of files to delete (seconds) |
 | `TRMNL_OUTPUT_DIR` | `images` | any path | Output directory |
@@ -233,6 +253,10 @@ warning and the default is used instead.
 | `--lon DEG` | Override longitude, decimal -180..180 (requires `--lat`) |
 | `--units {imperial,metric}` | Override unit system |
 | `--theme {light,dark}` | Override theme |
+| `--device {og,x}` | Panel preset; overrides `--width`/`--height`/`--bit-depth` |
+| `--width INT` | Panel width in px (200..4000) |
+| `--height INT` | Panel height in px (200..4000) |
+| `--bit-depth {1,2,4,8}` | Monochrome grey-ramp depth |
 | `--output-dir PATH` | Override output directory |
 | `--no-cache` | Always render, ignoring any recent cached image |
 | `-v`, `--verbose` | Debug logging |
@@ -269,6 +293,37 @@ TRMNL_AQI_PROVIDER=open-meteo
 # TRMNL_AQI_URL=http://my-sensor.local/aqi
 ```
 
+### Panel geometry and framing
+
+Pick a panel the easy way with a **device preset** (`--device` / `TRMNL_DEVICE`),
+which sets size and bit depth together and overrides the individual
+`--width`/`--height`/`--bit-depth` flags (and their env vars):
+
+| Preset | Model | Size | Bit depth |
+| --- | --- | --- | --- |
+| `og` | TRMNL OG Model | 800 × 480 | 2-bit (4 grey levels) |
+| `x` | TRMNL X Model | 1872 × 1404 | 4-bit (16 grey levels) |
+
+**Design decision — the layout is authored for 5:3 landscape only.** Everything
+is drawn in a fixed 800 × 480 (5:3) coordinate space and scaled uniformly to the
+target panel, so the design looks identical at any resolution and there is a
+single layout to maintain. We deliberately do **not** re-flow the layout for
+other aspect ratios.
+
+The TRMNL X panel is **4:3 (1872 × 1404), not 5:3.** Rather than distort or
+re-design the layout for it, the renderer keeps the content at its native 5:3
+aspect, centres it, and fills the remaining area with **whitespace framed by a
+double-line border**. The result fills the entire X display while the content
+proportions are unchanged. Any non-5:3 panel (within a small tolerance) gets the
+same framed treatment; a panel that *is* 5:3 (e.g. a 1600 × 960) fills edge to
+edge with no border. Implementation detail: see `render._finalize` /
+`render._draw_border`.
+
+> **Bit depth is a panel capability, not just a quality knob.** 4-bit only
+> looks better on a panel that actually renders 16 grey levels (the X). On a
+> 2-bit panel, leave it at the default — the `og` preset and the defaults
+> already match that hardware.
+
 ### Air Quality Index (AQI)
 
 The NWS feed has no air-quality data, so the AQI box is filled separately:
@@ -286,25 +341,32 @@ The NWS feed has no air-quality data, so the AQI box is filled separately:
 
 ## 6. Output format
 
-- **Path:** `images/img_<lat>_<lon>_<unix-ts>.png` — coordinates to 4 decimals,
-  `unix-ts` = generation time (seconds). E.g.
-  `img_40.0404_-76.3042_1780590454.png`.
-- **Format:** PNG, 800×480, palette mode, **2-bit** (4 grey levels), suitable
-  for direct display on the TRMNL panel. The location is stored in the PNG
-  `Description` text chunk.
+- **Path:** `images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png` —
+  coordinates to 4 decimals, then the panel geometry, then `unix-ts` = generation
+  time (seconds). E.g. `img_40.0404_-76.3042_800_480_2_1780590454.png` (OG) or
+  `img_40.0404_-76.3042_1872_1404_4_1780590454.png` (X). Including the geometry
+  keeps renders for different devices from colliding or sharing a cache entry.
+- **Format:** PNG, palette mode, at the configured panel size and bit depth
+  (800×480, **2-bit** / 4 grey levels by default; `--device x` → 1872×1404,
+  **4-bit** / 16 levels), suitable for direct display on the TRMNL panel. A
+  non-5:3 panel is letterboxed with a framed border (see [§5](#panel-geometry-and-framing)).
+  The location is stored in the PNG `Description` text chunk.
 - **Result:** the one-shot command prints JSON to stdout —
   `{"filename": "...", "cached": true|false, "description": "..."}`.
-- **Caching:** a same-coordinate request within `TRMNL_CACHE_SECONDS` (default
-  900 s) returns the existing file with `"cached": true`. Use `--no-cache` to
-  force a fresh render. After each fresh render, files older than
-  `TRMNL_CLEANUP_AGE_SECONDS` (default 6 h) are pruned automatically.
+- **Caching:** a request for the same coordinates **and panel geometry** within
+  `TRMNL_CACHE_SECONDS` (default 900 s) returns the existing file with
+  `"cached": true`. The geometry is part of the cache key, so an OG render is
+  never served for an X request (and vice-versa). Use `--no-cache` to force a
+  fresh render. After each fresh render, files older than
+  `TRMNL_CLEANUP_AGE_SECONDS` (default 6 h) are pruned automatically (per
+  coordinates + geometry).
 - The `images/` directory is created automatically and is git-ignored.
 
 Verify a generated file:
 
 ```bash
 python -c "from PIL import Image; im=Image.open('images/<file>.png'); print(im.mode, im.size, im.info.get('Description'))"
-# -> P (800, 480) Intercourse PA
+# -> P (800, 480) Intercourse PA      # or P (1872, 1404) ... with --device x
 ```
 
 ---
@@ -318,9 +380,9 @@ python -c "from PIL import Image; im=Image.open('images/<file>.png'); print(im.m
 | Current conditions look like the forecast, not observed | Observation fetch failed (logged as a warning). The render fell back to the current forecast hour; re-run when connectivity returns. |
 | Graph is empty / flat | The forecast had fewer than two hourly points. Check the forecast URL returns `digitalDWML` data for the point. |
 | Wrong location in output | `TRMNL_LATITUDE` / `TRMNL_LONGITUDE` not set as intended, or point is outside NWS coverage. |
-| Text/icons look blocky | Expected: the panel is 2-bit. The render supersamples 3× then quantises; this is the target output. |
+| Text/icons look blocky | Expected on a 2-bit panel: the render supersamples then quantises to the panel's grey ramp. For a panel that supports more levels, use `--device x` or a higher `--bit-depth`. |
 | Same image returned repeatedly (`"cached": true`) | A fresh image for those coordinates exists (within `TRMNL_CACHE_SECONDS`). Use `--no-cache` to force a render. |
-| Webhook `HTTP 422` | Image too large, wrong format, or corrupt — should not happen with the built-in 800×480 PNG; check the webhook URL is the **Webhook Image** plugin's. |
+| Webhook `HTTP 422` | Image too large, wrong format, or corrupt — should not happen with the built-in PNG (tens of KB at any preset); check the webhook URL is the **Webhook Image** plugin's. |
 | Webhook `HTTP 429` | TRMNL rate limit (12 uploads/hour) exceeded. Increase your schedule interval. |
 | Panel not updating after a `200` | Use **Force Refresh** in the TRMNL plugin settings; the device polls on its own cycle. |
 | AQI box shows `--` | AQI disabled (`TRMNL_AQI_PROVIDER=none`), the source was unreachable (logged), or the observation fetch failed. |

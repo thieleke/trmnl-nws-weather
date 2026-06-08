@@ -1,9 +1,18 @@
-"""Render a :class:`~trmnl_nws_weather.models.Forecast` to a 2-bit 800x480 PNG.
+"""Render a :class:`~trmnl_nws_weather.models.Forecast` to a monochrome PNG.
 
-Quality strategy: everything is drawn on an 8-bit grayscale canvas at 4x the
-target resolution, then downscaled with LANCZOS resampling.  This antialiases
-text, the temperature curve, and the icons.  The result is finally quantised to
-four grey levels (2-bit) to match the TRMNL e-ink panel.
+Quality strategy: everything is drawn on an 8-bit grayscale canvas at a
+supersampled multiple of the target resolution, then downscaled with LANCZOS
+resampling.  This antialiases text, the temperature curve, and the icons.  The
+result is finally quantised to a configurable grey ramp (2-bit / four levels by
+default, up to 4-bit / sixteen levels) to match the TRMNL e-ink panel.
+
+The whole layout is authored in a fixed *logical* 800x480 coordinate space
+(``WIDTH`` x ``HEIGHT``).  ``settings.width`` / ``settings.height`` choose the
+final panel size; the logical layout is scaled uniformly to fit, preserving its
+native 5:3 aspect ratio.  When the requested panel is a different shape, the
+content is centred and the surrounding whitespace is framed with a double-line
+border so the image still fills the entire display without distorting the
+layout (see :func:`_finalize`).
 
 Layout follows the reference photo with the plan revisions applied:
   * the header location line is removed and the date enlarged;
@@ -13,6 +22,7 @@ Layout follows the reference photo with the plan revisions applied:
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 from PIL import Image
 from PIL.Image import Resampling
@@ -24,71 +34,156 @@ from .models import CurrentObservation, Forecast, HourPoint, effective_sky
 from .theme import Palette, font
 from .utils import SUPERSAMPLING_FACTOR, format_clock, format_day_hour_label, format_hour_label
 
+# Logical layout canvas.  All section renderers author coordinates in this
+# space; the final panel size is chosen at render time and the logical canvas
+# is scaled to fit (see ``_Canvas`` and ``_finalize``).
 WIDTH, HEIGHT = 800, 480
-MARGIN = 16  # content inset (no outer frame is drawn)
+LOGICAL_ASPECT = WIDTH / HEIGHT  # 5:3
+MARGIN = 16  # content inset
 
-# Four grey levels of a 2-bit image.
-_LEVELS = (0, 64, 128, 255)
+# Panels whose aspect ratio is within this fraction of the logical 5:3 are
+# treated as an exact match: the content fills the whole panel and no border is
+# drawn.  Anything further off is letterboxed with the double-line frame.
+_ASPECT_TOLERANCE = 0.02
 
-# Precomputed quantization LUT: maps each 8-bit value to the nearest palette index (0..3).
-# Computed once at module load to avoid recomputing on every render.
-_INDEX_LUT = bytes(
-    min(range(4), key=lambda i: abs(v - _LEVELS[i])) for v in range(256)
-)
+
+# The 2-bit ramp keeps its historically tuned (non-linear) mid greys so existing
+# panels and the reference screenshot render identically; deeper bit depths use
+# an evenly spaced ramp.
+_LEVELS_2BIT = (0, 64, 128, 255)
+
+
+@lru_cache(maxsize=8)
+def _quant_table(bit_depth: int) -> tuple[tuple[int, ...], bytes]:
+    """Return ``(levels, lut)`` for ``bit_depth``.
+
+    ``levels`` is the grey ramp (2**bit_depth entries); ``lut`` maps each 8-bit
+    value to the nearest level's palette index.  Cached because the LUT is
+    rebuilt only when the configured depth changes.
+    """
+    if bit_depth == 2:
+        levels = _LEVELS_2BIT
+    else:
+        n = 1 << bit_depth
+        levels = tuple(round(i * 255 / (n - 1)) for i in range(n))
+    lut = bytes(
+        min(range(len(levels)), key=lambda i: abs(v - levels[i]))
+        for v in range(256)
+    )
+    return levels, lut
 
 
 class _Canvas:
-    """Thin wrapper that scales all coordinates/sizes by the supersample factor."""
+    """Thin wrapper that scales all logical coordinates/sizes by ``scale``.
 
-    def __init__(self, palette: Palette) -> None:
+    ``scale`` is the supersample factor mapping logical 800x480 coordinates onto
+    the master buffer; the buffer is downscaled to the final panel afterwards.
+    For the default 800x480 panel ``scale`` is :data:`SUPERSAMPLING_FACTOR`,
+    reproducing the original 4x master exactly.
+    """
+
+    def __init__(self, palette: Palette, scale: float = SUPERSAMPLING_FACTOR) -> None:
         self.p = palette
-        self.img = Image.new("L", (WIDTH * SUPERSAMPLING_FACTOR, HEIGHT * SUPERSAMPLING_FACTOR), palette.bg)
+        self.ss = scale
+        self.img = Image.new("L", (round(WIDTH * scale), round(HEIGHT * scale)), palette.bg)
         self.d = ImageDraw.Draw(self.img)
 
-    # -- primitives (inputs in final 800x480 coordinates) ------------------
+    # -- primitives (inputs in logical 800x480 coordinates) ----------------
     def line(self, xy: tuple[float, float] | tuple[float, float, float, float], width: float = 1, fill: float | None = None) -> None:
         fill = self.p.fg if fill is None else fill
-        self.d.line([c * SUPERSAMPLING_FACTOR for c in xy], fill=fill, width=max(1, round(width * SUPERSAMPLING_FACTOR)))
+        self.d.line([c * self.ss for c in xy], fill=fill, width=max(1, round(width * self.ss)))
 
     def rect(self, box: tuple[float, float, float, float], width: float = 1, outline: float | None = None) -> None:
         outline = self.p.fg if outline is None else outline
-        self.d.rectangle([c * SUPERSAMPLING_FACTOR for c in box], outline=outline,
-                         width=max(1, round(width * SUPERSAMPLING_FACTOR)))
+        self.d.rectangle([c * self.ss for c in box], outline=outline,
+                         width=max(1, round(width * self.ss)))
 
     def fill_rect(self, box: tuple[float, float, float, float], fill: float) -> None:
-        self.d.rectangle([c * SUPERSAMPLING_FACTOR for c in box], fill=fill)
+        self.d.rectangle([c * self.ss for c in box], fill=fill)
 
     def dot(self, x: float, y: float, r: float, fill: float | None = None) -> None:
         fill = self.p.fg if fill is None else fill
-        self.d.ellipse([(x - r) * SUPERSAMPLING_FACTOR, (y - r) * SUPERSAMPLING_FACTOR, (x + r) * SUPERSAMPLING_FACTOR, (y + r) * SUPERSAMPLING_FACTOR],
+        self.d.ellipse([(x - r) * self.ss, (y - r) * self.ss, (x + r) * self.ss, (y + r) * self.ss],
                        fill=fill)
 
     def text(self, xy: tuple[float, float], s: str, size: float, *, bold: bool = False, anchor: str = "la", fill: float | None = None) -> None:
         fill = self.p.fg if fill is None else fill
-        self.d.text((xy[0] * SUPERSAMPLING_FACTOR, xy[1] * SUPERSAMPLING_FACTOR), s, font=font(round(size * SUPERSAMPLING_FACTOR), bold=bold),
+        self.d.text((xy[0] * self.ss, xy[1] * self.ss), s, font=font(round(size * self.ss), bold=bold),
                     fill=fill, anchor=anchor)
 
     def text_width(self, s: str, size: float, *, bold: bool = False) -> float:
-        f = font(round(size * SUPERSAMPLING_FACTOR), bold=bold)
-        return self.d.textlength(s, font=f) / SUPERSAMPLING_FACTOR
+        f = font(round(size * self.ss), bold=bold)
+        return self.d.textlength(s, font=f) / self.ss
 
     def paste_icon(self, glyph: Image.Image, x: float, y: float, fill: float | None = None) -> None:
         """Composite a monochrome icon mask onto the page in ``fill`` colour."""
         fill = self.p.fg if fill is None else fill
         solid = Image.new("L", glyph.size, fill)
-        self.img.paste(solid, (round(x * SUPERSAMPLING_FACTOR), round(y * SUPERSAMPLING_FACTOR)), glyph)
+        self.img.paste(solid, (round(x * self.ss), round(y * self.ss)), glyph)
 
 
-def _quantize_2bit(img: Image.Image) -> Image.Image:
-    """Downscale to target size and map to a 4-colour (2-bit) palette image."""
-    small = img.resize((WIDTH, HEIGHT), Resampling.LANCZOS)
+def _finalize(master: Image.Image, palette: Palette, settings: Settings) -> Image.Image:
+    """Fit the logical master onto the panel and quantise to the grey ramp.
 
-    indexed = small.point(_INDEX_LUT)
+    The master (drawn in supersampled logical space) is downscaled to the
+    largest 5:3 rectangle that fits ``settings.width`` x ``settings.height``.
+    When the panel shares the logical 5:3 aspect that rectangle fills it exactly;
+    otherwise the content is centred on a blank panel and a double-line border is
+    drawn in the surrounding whitespace so the image still fills the display.
+    """
+    target_w, target_h = settings.width, settings.height
+    target_aspect = target_w / target_h
+    border = abs(target_aspect - LOGICAL_ASPECT) > _ASPECT_TOLERANCE * LOGICAL_ASPECT
+
+    if not border:
+        # Same shape (within tolerance): fill the panel, no frame.
+        content = master.resize((target_w, target_h), Resampling.LANCZOS)
+        return _quantize(content, settings.bit_depth)
+
+    # Different shape: reserve a margin for the frame, scale the content to fit
+    # inside it preserving the 5:3 aspect, and centre it.
+    margin_frac = 0.04
+    scale = min(target_w * (1 - 2 * margin_frac) / WIDTH,
+                target_h * (1 - 2 * margin_frac) / HEIGHT)
+    content_w, content_h = round(WIDTH * scale), round(HEIGHT * scale)
+    content = master.resize((content_w, content_h), Resampling.LANCZOS)
+
+    canvas = Image.new("L", (target_w, target_h), palette.bg)
+    ox, oy = (target_w - content_w) // 2, (target_h - content_h) // 2
+    canvas.paste(content, (ox, oy))
+    _draw_border(canvas, palette, (ox, oy, ox + content_w, oy + content_h), scale)
+    return _quantize(canvas, settings.bit_depth)
+
+
+def _draw_border(img: Image.Image, palette: Palette,
+                 content_box: tuple[int, int, int, int], scale: float) -> None:
+    """Draw a double-line frame hugging ``content_box`` in the whitespace.
+
+    Two concentric rectangles are drawn just outside the content, sized relative
+    to ``scale`` so the frame keeps the same visual weight at any resolution.
+    The lines are axis-aligned, so they stay crisp drawn directly on the
+    full-resolution panel (no supersampling needed).
+    """
+    cx0, cy0, cx1, cy1 = content_box
+    margin = min(cx0, cy0)  # available whitespace on the tighter axis
+    inner = round(margin * 0.30)
+    gap = max(2, round(margin * 0.30))
+    lw = max(1, round(1.5 * scale))
+    d = ImageDraw.Draw(img)
+    for off in (inner, inner + gap):
+        d.rectangle((cx0 - off, cy0 - off, cx1 - 1 + off, cy1 - 1 + off),
+                    outline=palette.fg, width=lw)
+
+
+def _quantize(img: Image.Image, bit_depth: int) -> Image.Image:
+    """Map an ``L`` image to a monochrome palette image at ``bit_depth``."""
+    levels, lut = _quant_table(bit_depth)
+    indexed = img.point(lut)
     out = indexed.convert("P")
-    palette = []
-    for level in _LEVELS:
+    palette: list[int] = []
+    for level in levels:
         palette += [level, level, level]
-    palette += [0, 0, 0] * (256 - len(_LEVELS))
+    palette += [0, 0, 0] * (256 - len(levels))
     out.putpalette(palette)
     return out
 
@@ -187,8 +282,8 @@ def _graph(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings) ->
 
     # Curve.
     coords = [(x_of(h.time), y_of(h.temperature_f)) for h in pts]  # type: ignore[misc]
-    c.d.line([(x * SUPERSAMPLING_FACTOR, y * SUPERSAMPLING_FACTOR) for x, y in coords], fill=c.p.fg,
-             width=max(1, round(2 * SUPERSAMPLING_FACTOR)), joint="curve")
+    c.d.line([(x * c.ss, y * c.ss) for x, y in coords], fill=c.p.fg,
+             width=max(1, round(2 * c.ss)), joint="curve")
     for x, y in coords:
         c.dot(x, y, 2.2)
 
@@ -206,7 +301,7 @@ def _graph(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings) ->
             continue
         sky = effective_sky(h.sky, h.pop_percent)
         night = not sun.is_daytime(h.time, forecast.latitude, forecast.longitude)
-        glyph = icons.render(sky, round(icon_px * SUPERSAMPLING_FACTOR), night=night)
+        glyph = icons.render(sky, round(icon_px * c.ss), night=night)
         c.paste_icon(glyph, round(x - icon_px / 2), round(y + 8), fill=c.p.muted)
 
     _peak_label(c, "HIGH", hi, x_of(hi.time), y_of(hi.temperature_f), settings, above=True)
@@ -283,7 +378,7 @@ def _current(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings,
     # --- Left half: icon, big temperature, condition label ---
     icon_size = 104
     night = not sun.is_daytime(now, forecast.latitude, forecast.longitude)
-    icon = icons.render(sky, round(icon_size * SUPERSAMPLING_FACTOR), night=night)
+    icon = icons.render(sky, round(icon_size * c.ss), night=night)
     c.paste_icon(icon, 28, top + 6)
 
     temp_num = units.format_temp(temp_f, settings.units).replace("°", "")
@@ -326,7 +421,7 @@ def _current(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings,
             continue
         label, value, glyph_name = content
         bx0, by0, bx1, by1 = cell
-        gly = icons.glyph(glyph_name, round(18 * SUPERSAMPLING_FACTOR))
+        gly = icons.glyph(glyph_name, round(18 * c.ss))
         c.paste_icon(gly, round(bx0 + 16), round(by0 + 14), fill=c.p.fg)
         c.text((bx0 + 40, by0 + 23), label, 13, anchor="lm", fill=c.p.muted)
         c.text(((bx0 + bx1) / 2, by0 + 48), value, 27, bold=True, anchor="mm")
@@ -367,7 +462,7 @@ def _forecast_strip(c: _Canvas, forecast: Forecast, now: datetime,
 
         sky = effective_sky(h.sky, h.pop_percent)
         night = not sun.is_daytime(h.time, forecast.latitude, forecast.longitude)
-        icon = icons.render(sky, round(30 * SUPERSAMPLING_FACTOR), night=night)
+        icon = icons.render(sky, round(30 * c.ss), night=night)
         c.paste_icon(icon, round(cx - 38), top + 30)
         c.text((cx + 6, top + 46), units.format_temp(h.temperature_f, settings.units,
                with_unit=True), 20, bold=True, anchor="lm")
@@ -385,7 +480,7 @@ def _forecast_strip(c: _Canvas, forecast: Forecast, now: datetime,
             gap = 4
             total = isz + gap + c.text_width(pop, 16.25)
             sx = cx - total / 2
-            drop = icons.glyph("droplet", round(isz * SUPERSAMPLING_FACTOR))
+            drop = icons.glyph("droplet", round(isz * c.ss))
             c.paste_icon(drop, round(sx), round(py - isz / 2), fill=c.p.muted)
             c.text((sx + isz + gap, py), pop, 16.25, anchor="lm", fill=c.p.muted)
         else:
@@ -402,12 +497,13 @@ def render(forecast: Forecast, settings: Settings,
            now: datetime | None = None,
            observation: CurrentObservation | None = None,
            headline: str | None = None) -> Image.Image:
-    """Render the forecast to a 2-bit (4 grey level) 800x480 ``P`` image.
+    """Render the forecast to a monochrome ``P`` image.
 
-    When ``observation`` is supplied, the current-conditions section reflects
-    actual measured weather; otherwise it falls back to the current forecast
-    hour.  ``headline`` is an optional upcoming-period forecast phrase shown in
-    the header beside the date.
+    The panel size and bit depth come from ``settings`` (``width`` x ``height``,
+    default 800x480; ``bit_depth``, default 2).  When ``observation`` is
+    supplied, the current-conditions section reflects actual measured weather;
+    otherwise it falls back to the current forecast hour.  ``headline`` is an
+    optional upcoming-period forecast phrase shown in the header beside the date.
     """
     if now is None:
         # Anchor "now" to the forecast's own timezone so the marker lines up.
@@ -415,7 +511,14 @@ def render(forecast: Forecast, settings: Settings,
         now = datetime.now(ref.tzinfo)
 
     palette = Palette(settings.theme)
-    c = _Canvas(palette)
+
+    # Supersample relative to the final content size so antialiasing quality is
+    # preserved at any panel resolution.  For the default 800x480 panel this is
+    # exactly SUPERSAMPLING_FACTOR (the original 4x master); the master only
+    # grows past 4x for panels larger than the supersampled buffer.
+    content_scale = min(settings.width / WIDTH, settings.height / HEIGHT)
+    master_scale = max(SUPERSAMPLING_FACTOR, content_scale)
+    c = _Canvas(palette, master_scale)
 
     _header(c, now, settings, headline)
     # Dividers bracketing the temperature graph (below the header, above the
@@ -426,4 +529,4 @@ def render(forecast: Forecast, settings: Settings,
     _current(c, forecast, now, settings, observation)
     _forecast_strip(c, forecast, now, settings)
 
-    return _quantize_2bit(c.img)
+    return _finalize(c.img, palette, settings)

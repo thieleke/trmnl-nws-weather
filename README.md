@@ -1,9 +1,11 @@
 # trmnl-nws-weather
 
-A Python service that renders a weather display PNG for an OG 7.5" TRMNL e-ink
-panel (800 × 480, 2-bit / 4 grey levels). It periodically fetches the National
-Weather Service digital DWML forecast, parses it, and writes a high-quality
-timestamped image.
+A Python service that renders a weather display PNG for a TRMNL e-ink panel. It
+defaults to the TRMNL OG model (800 × 480, 2-bit / 4 grey levels) and also
+supports the TRMNL X model (1872 × 1404, 4-bit / 16 grey levels) — or any custom
+panel size and bit depth (see [Panel size and bit depth](#panel-size-and-bit-depth)).
+It periodically fetches the National Weather Service digital DWML forecast,
+parses it, and writes a high-quality timestamped image.
 
 *Strongly* inspired by the layout of [Today: Beautiful Weather](https://trmnl.com/recipes/270447)
 with changes such as:
@@ -45,13 +47,34 @@ Both unit systems (Imperial °F / mph, Metric °C / km/h) and light and dark mod
 
 ### Rendering quality
 
-Everything is drawn on an 8-bit grayscale canvas at 4× the target resolution
-and downscaled with LANCZOS resampling before being quantised to four grey
-levels. This antialiases text, the temperature curve, and the procedurally
-drawn icons so they stay crisp on the panel. The font (the freely-licensed
-**Inter** family, chosen to match the TRMNL reference design; DejaVu Sans is
-also bundled) is in `trmnl_nws_weather/assets/fonts/` so rendering does not
-depend on host system fonts.
+Everything is drawn on an 8-bit grayscale canvas supersampled above the target
+resolution and downscaled with LANCZOS resampling before being quantised to the
+panel's grey ramp (four levels at 2-bit, sixteen at 4-bit). This antialiases
+text, the temperature curve, and the procedurally drawn icons so they stay crisp
+on the panel. The font (the freely-licensed **Inter** family, chosen to match
+the TRMNL reference design; DejaVu Sans is also bundled) is in
+`trmnl_nws_weather/assets/fonts/` so rendering does not depend on host system
+fonts.
+
+### Panel size and bit depth
+
+The layout is authored in a fixed 5:3 ratio, landscape-only layout and scaled
+uniformly to whatever panel you target, so it looks the same at any resolution.
+Pick a panel with the `--device` preset (or `TRMNL_DEVICE`):
+
+| Preset | Model | Size | Bit depth |
+| --- | --- | --- | --- |
+| `og` | TRMNL OG Model | 800 × 480 | 2-bit (4 grey levels) |
+| `x` | TRMNL X Model | 1872 × 1404 | 4-bit (16 grey levels) |
+
+A preset overrides the individual `--width` / `--height` / `--bit-depth` flags
+(and their `TRMNL_*` env vars), which you can otherwise set directly for a custom
+panel.
+
+When the target panel is not 5:3 (e.g. TRMNL X is 4:3), the content keeps its
+native 5:3 aspect ratio, is centred, and the surrounding whitespace is framed
+with a double-line border — so the image still fills the entire display without
+stretching or distorting the layout.
 
 ## Requirements
 
@@ -113,8 +136,9 @@ passed on the command line still overrides the environment value):
 uv run trmnl-nws-weather --webhook
 ```
 
-The output is a 2 bit, 800×480 PNG - well under TRMNL's 5 MB limit.
-To keep the panel current, run that command on a schedule (cron,
+The output is a monochrome palette PNG (2-bit 800×480 by default; add
+`--device x` for a 4-bit 1872×1404 TRMNL X image) - well under TRMNL's 5 MB
+limit. To keep the panel current, run that command on a schedule (cron,
 Task Scheduler, systemd timer) - every 30 minutes is a good default. See the
 [Runbook](docs/RUNBOOK.md) for a scheduling and caching details.
 
@@ -135,22 +159,26 @@ uv run trmnl-nws-weather --webserver --port 8080
 > the service, configuration, troubleshooting), see the
 > [Runbook](docs/RUNBOOK.md).
 
-Images are written to `images/img_<lat>_<lon>_<unix-ts>.png` (e.g.
-`img_40.0404_-76.3042_1780590454.png`). A one-shot run prints a JSON result to
-stdout (logs go to stderr):
+Images are written to
+`images/img_<lat>_<lon>_<width>_<height>_<bit_depth>_<unix-ts>.png` (e.g.
+`img_40.0404_-76.3042_800_480_2_1780590454.png`). The panel geometry is part of
+the name so renders for different devices never collide. A one-shot run prints a
+JSON result to stdout (logs go to stderr):
 
 ```json
-{"filename": "img_40.0404_-76.3042_1780590454.png", "cached": false, "description": "Intercourse PA"}
+{"filename": "img_40.0404_-76.3042_800_480_2_1780590454.png", "cached": false, "description": "Intercourse PA"}
 ```
 
 ### Caching
 
 A one-shot request is served from cache when an image for the same
-coordinates was generated within the last 15 minutes
-(`TRMNL_CACHE_SECONDS`): the existing filename is returned with `"cached":
-true` and no fetch/render happens. Pass `--no-cache` to always render. Offline
-(`--xml`) renders bypass the cache. The location description is embedded in the
-PNG metadata so cache hits can report it without re-fetching.
+coordinates **and panel geometry** (width / height / bit depth) was generated
+within the last 15 minutes (`TRMNL_CACHE_SECONDS`): the existing filename is
+returned with `"cached": true` and no fetch/render happens. Because the cache
+key includes the geometry, an OG render is never served to an X request (and
+vice-versa). Pass `--no-cache` to always render. Offline (`--xml`) renders
+bypass the cache. The location description is embedded in the PNG metadata so
+cache hits can report it without re-fetching.
 
 ### CLI options
 
@@ -164,6 +192,10 @@ PNG metadata so cache hits can report it without re-fetching.
 | `--units {imperial,metric}` | Override the unit system |
 | `--theme {light,dark}` | Override the polarity |
 | `--time-format {12,24}` | Override the clock format |
+| `--device {og,x}` | Panel preset (TRMNL OG or X); overrides `--width`/`--height`/`--bit-depth` |
+| `--width INT` | Panel width in px, 200..4000 (default 800) |
+| `--height INT` | Panel height in px, 200..4000 (default 480) |
+| `--bit-depth {1,2,4,8}` | Monochrome grey-ramp depth (default 2 = 4 levels) |
 | `--output-dir PATH` | Override the images directory |
 | `--no-cache` | Always render, ignoring any recent cached image |
 | `--webhook [URL]` | Render, then POST the image to a TRMNL webhook URL, and exit. The URL may be omitted when `TRMNL_WEBHOOK_URL` is set |
@@ -190,11 +222,15 @@ warning and the default is used instead.
 | `TRMNL_UNITS` | `imperial` | `imperial` or `metric` | Unit system |
 | `TRMNL_THEME` | `light` | `light` or `dark` | Light/dark mode |
 | `TRMNL_TIME_FORMAT` | `12` | `12` or `24` | Clock format |
+| `TRMNL_DEVICE` | *(empty)* | `og` or `x` | Panel preset; overrides the three values below |
+| `TRMNL_WIDTH` | `800` | 200 to 4000 | Panel width in px |
+| `TRMNL_HEIGHT` | `480` | 200 to 4000 | Panel height in px |
+| `TRMNL_BIT_DEPTH` | `2` | `1`, `2`, `4`, or `8` | Monochrome grey-ramp depth (4/16 levels) |
 | `TRMNL_REFRESH_SECONDS` | `1800` | 60 to 86400 | Re-render interval |
 | `TRMNL_GRAPH_WINDOW_HOURS` | `18` | 1 to 720 | Temperature graph time span |
 | `TRMNL_GRAPH_NOW_POSITION` | `0.0` | 0.0 to 1.0 | "Now" position in the graph (0 = left) |
 | `TRMNL_FORECAST_HOURS` | `6` | 1 to 240 | Columns in the forecast strip |
-| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same-coordinate requests |
+| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same coordinates + panel geometry |
 | `TRMNL_CLEANUP_AGE_SECONDS` | `21600` | 0 to 604800 | Delete generated PNGs older than this |
 | `TRMNL_OUTPUT_DIR` | `images` | any path | Output directory |
 | `TRMNL_AQI_PROVIDER` | `open-meteo` | `open-meteo` or `none` | AQI source |
@@ -259,7 +295,7 @@ trmnl_nws_weather/
   icons.py         # procedurally drawn weather glyphs
   models.py        # forecast data models + Sky classification
   nws.py           # fetch + parse digital DWML
-  render.py        # 2-bit 800x480 page renderer
+  render.py        # monochrome page renderer (scales 800x480 layout to any panel)
   service.py       # fetch -> render -> timestamped PNG loop
   theme.py         # palette + vendored fonts
   units.py         # Imperial/Metric conversion + formatting
