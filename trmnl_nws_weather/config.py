@@ -3,20 +3,33 @@
 Settings are read from environment variables (prefixed ``TRMNL_``) with sane
 defaults, so the service runs out of the box for hard-coded Intercourse, PA
 location.
+
+All environment variable values are validated before use.  Invalid values fall
+back to their built-in defaults after a warning is logged, so malicious or
+misconfigured input cannot crash the service or cause unexpected behaviour.
+
+Validation logic is centralised in :mod:`trmnl_nws_weather.validate`; this
+module provides thin wrappers that handle string parsing (since environment
+variables are always strings) and delegate to the shared validators.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from pathlib import Path
-from typing import TypeVar
 
 from dotenv import load_dotenv
 
+from . import validate
+from .utils import TimeFormat  # noqa: PLC0414
+
 load_dotenv()  # Reads variables from the .env file into the environment, so they can be picked up by Settings
+
+log = logging.getLogger("trmnl_nws_weather")
 
 
 def _format_coordinate(value: float) -> str:
@@ -45,20 +58,91 @@ class Theme(str, Enum):
     DARK = "dark"  # white text on a black background
 
 
-# Re-export TimeFormat from utils so it is available as config.TimeFormat.
-from .utils import TimeFormat  # noqa: PLC0414
+# -----------------------------------------------------------------------
+# Environment variable helpers
+# -----------------------------------------------------------------------
 
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
-T = TypeVar("T")
 
-def _env_typed(key: str, default: T, cast: type = str) -> T:
-    """Read env var, falling back to default, then cast."""
-    val = _env(key, str(default))
-    return cast(val) if val else default
+def _env_url(key: str, default: str) -> str:
+    """Read and validate a URL environment variable.
 
+    Parses the raw string from the environment and delegates to
+    :func:`validate.validate_url`.  Returns *default* on invalid input.
+    """
+    return validate.validate_url(_env(key, default), key, default=default)
+
+
+def _env_coordinate(key: str, low: float, high: float, default: float) -> float:
+    """Read and validate a coordinate environment variable.
+
+    Parses the raw string to float and delegates to
+    :func:`validate.validate_coordinate`.  Returns *default* on invalid input.
+    """
+    raw = _env(key, str(default))
+    try:
+        value = float(raw)
+    except (ValueError, TypeError):
+        log.warning("%s is not a valid number %r; falling back to default (%s)",
+                    key, raw, default)
+        return default
+    return validate.validate_coordinate(value, key, low, high, default)
+
+
+def _env_int(key: str, low: int, high: int, default: int) -> int:
+    """Read and validate an integer environment variable.
+
+    Parses the raw string to int and delegates to
+    :func:`validate.validate_int`.  Returns *default* on invalid input.
+    """
+    raw = _env(key, str(default))
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        log.warning("%s is not a valid integer %r; falling back to default (%s)",
+                    key, raw, default)
+        return default
+    return validate.validate_int(value, key, low, high, default)
+
+
+def _env_float(key: str, low: float, high: float, default: float) -> float:
+    """Read and validate a float environment variable.
+
+    Parses the raw string to float and delegates to
+    :func:`validate.validate_float`.  Returns *default* on invalid input.
+    """
+    raw = _env(key, str(default))
+    try:
+        value = float(raw)
+    except (ValueError, TypeError):
+        log.warning("%s is not a valid number %r; falling back to default (%s)",
+                    key, raw, default)
+        return default
+    return validate.validate_float(value, key, low, high, default)
+
+
+def _env_enum(key: str, enum_class: type[Enum], default: Enum) -> Enum:
+    """Read and validate an enum environment variable.
+
+    Comparison is case-insensitive.  Returns *default* on invalid input.
+    """
+    raw = _env(key, default.value)
+    try:
+        return enum_class(raw.lower())  # type: ignore[call-arg]
+    except ValueError:
+        valid = ", ".join(member.value for member in enum_class)
+        log.warning("%s value %r is not valid (allowed: %s); "
+                    "falling back to default (%s)",
+                    key, raw, valid, default.value)
+        return default
+
+
+# -----------------------------------------------------------------------
+# Defaults
+# -----------------------------------------------------------------------
 
 DEFAULT_LATITUDE = 40.0404
 DEFAULT_LONGITUDE = -76.3042
@@ -76,6 +160,8 @@ DEFAULT_OUTPUT_DIR = Path("images")
 # key-less Open-Meteo Air Quality API (see aqi.py); a custom URL overrides it.
 DEFAULT_AQI_PROVIDER = "open-meteo"
 DEFAULT_AQI_URL = ""
+# Default webhook URL for --webhook; empty means one must be given on the CLI.
+DEFAULT_WEBHOOK_URL = ""
 
 # User-Agent strings for outgoing HTTP requests.
 NWS_USER_AGENT = "trmnl-nws-weather/0.1"
@@ -87,23 +173,26 @@ class Settings:
     """Immutable service configuration."""
 
     latitude: float = field(
-        default_factory=lambda: float(_env("TRMNL_LATITUDE", str(DEFAULT_LATITUDE)))
+        default_factory=lambda: _env_coordinate(
+            "TRMNL_LATITUDE", -90.0, 90.0, DEFAULT_LATITUDE)
     )
     longitude: float = field(
-        default_factory=lambda: float(_env("TRMNL_LONGITUDE", str(DEFAULT_LONGITUDE)))
+        default_factory=lambda: _env_coordinate(
+            "TRMNL_LONGITUDE", -180.0, 180.0, DEFAULT_LONGITUDE)
     )
-    units: Units = field(
-        default_factory=lambda: Units(_env("TRMNL_UNITS", DEFAULT_UNITS.value).lower())
+    units: Units = field(  # type: ignore[assignment]
+        default_factory=lambda: _env_enum("TRMNL_UNITS", Units, DEFAULT_UNITS)
     )
-    theme: Theme = field(
-        default_factory=lambda: Theme(_env("TRMNL_THEME", DEFAULT_THEME.value).lower())
+    theme: Theme = field(  # type: ignore[assignment]
+        default_factory=lambda: _env_enum("TRMNL_THEME", Theme, DEFAULT_THEME)
     )
-    time_format: TimeFormat = field(
-        default_factory=lambda: TimeFormat(_env("TRMNL_TIME_FORMAT", DEFAULT_TIME_FORMAT.value))
+    time_format: TimeFormat = field(  # type: ignore[assignment]
+        default_factory=lambda: _env_enum("TRMNL_TIME_FORMAT", TimeFormat, DEFAULT_TIME_FORMAT)
     )
     # How often the service re-fetches the forecast and re-renders, in seconds.
     refresh_seconds: int = field(
-        default_factory=lambda: int(_env("TRMNL_REFRESH_SECONDS", str(DEFAULT_REFRESH_SECONDS)))
+        default_factory=lambda: _env_int(
+            "TRMNL_REFRESH_SECONDS", 60, 86400, DEFAULT_REFRESH_SECONDS)
     )
     # Width of the temperature graph time window and where "now" sits in it,
     # as a fraction from the left edge.  The layout spec calls for "now" centred,
@@ -113,25 +202,30 @@ class Settings:
     # left and fill the window with the 18-hour forecast.  Override to 0.5 if a
     # data source with historical hours is ever wired in.
     graph_window_hours: int = field(
-        default_factory=lambda: int(_env("TRMNL_GRAPH_WINDOW_HOURS", str(DEFAULT_GRAPH_WINDOW_HOURS)))
+        default_factory=lambda: _env_int(
+            "TRMNL_GRAPH_WINDOW_HOURS", 1, 720, DEFAULT_GRAPH_WINDOW_HOURS)
     )
     graph_now_position: float = field(
-        default_factory=lambda: float(_env("TRMNL_GRAPH_NOW_POSITION", str(DEFAULT_GRAPH_NOW_POSITION)))
+        default_factory=lambda: _env_float(
+            "TRMNL_GRAPH_NOW_POSITION", 0.0, 1.0, DEFAULT_GRAPH_NOW_POSITION)
     )
     # Number of forecast columns shown along the bottom.
     # Window is centred on the current hour so the layout stays stable
     # (does not scroll left→right as time advances).
     forecast_hours: int = field(
-        default_factory=lambda: int(_env("TRMNL_FORECAST_HOURS", str(DEFAULT_FORECAST_HOURS)))
+        default_factory=lambda: _env_int(
+            "TRMNL_FORECAST_HOURS", 1, 240, DEFAULT_FORECAST_HOURS)
     )
     # A freshly-requested image is served from cache if one exists for the same
     # coordinates generated within this many seconds (unless --no-cache).
     cache_seconds: int = field(
-        default_factory=lambda: int(_env("TRMNL_CACHE_SECONDS", str(DEFAULT_CACHE_SECONDS)))
+        default_factory=lambda: _env_int(
+            "TRMNL_CACHE_SECONDS", 0, 86400, DEFAULT_CACHE_SECONDS)
     )
     # Generated PNGs older than this are deleted after each fresh render, so the
     cleanup_age_seconds: int = field(
-        default_factory=lambda: int(_env("TRMNL_CLEANUP_AGE_SECONDS", str(DEFAULT_CLEANUP_AGE_SECONDS)))
+        default_factory=lambda: _env_int(
+            "TRMNL_CLEANUP_AGE_SECONDS", 0, 604800, DEFAULT_CLEANUP_AGE_SECONDS)
     )
     # Directory generated PNGs are written to.
     output_dir: Path = field(
@@ -145,7 +239,11 @@ class Settings:
         default_factory=lambda: _env("TRMNL_AQI_PROVIDER", DEFAULT_AQI_PROVIDER)
     )
     aqi_url: str = field(
-        default_factory=lambda: _env("TRMNL_AQI_URL", DEFAULT_AQI_URL)
+        default_factory=lambda: _env_url("TRMNL_AQI_URL", DEFAULT_AQI_URL)
+    )
+    # Default destination for ``--webhook`` when no URL is given on the CLI.
+    webhook_url: str = field(
+        default_factory=lambda: _env_url("TRMNL_WEBHOOK_URL", DEFAULT_WEBHOOK_URL)
     )
 
     @property

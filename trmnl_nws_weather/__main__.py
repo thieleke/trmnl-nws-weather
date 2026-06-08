@@ -11,6 +11,9 @@ Examples::
     # Render and POST the image to a webhook URL:
     uv run trmnl-nws-weather --webhook https://example.com/webhook
 
+    # ...or omit the URL when TRMNL_WEBHOOK_URL is set in the environment/.env:
+    uv run trmnl-nws-weather --webhook
+
     # Run the periodic service:
     uv run trmnl-nws-weather
 """
@@ -27,6 +30,7 @@ from pathlib import Path
 
 from .config import Settings, Theme, TimeFormat, Units
 from .service import render_once, run_forever, run_webserver, upload_to_webhook
+from . import validate as _validate
 
 _QUANTUM = Decimal("0.0001")  # 4 fractional digits
 
@@ -78,11 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="override the images output directory")
     parser.add_argument("--no-cache", action="store_true",
                         help="always render, ignoring any recent cached image")
-    parser.add_argument("--webhook", type=str, default=None,
-                        help="POST the generated image to the given webhook URL and exit")
+    parser.add_argument("--webhook", type=str, nargs="?", default=None, const="",
+                        help="POST the generated image to a webhook URL and exit; "
+                             "the URL may be omitted if TRMNL_WEBHOOK_URL is set")
     parser.add_argument("--webserver", action="store_true",
                         help="run a web server to serve the weather image")
-    parser.add_argument("--port", type=int, default=8400,
+    parser.add_argument("--port", type=int, default=None,
                         help="port for the web server (default: 8400)")
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser
@@ -107,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         overrides["output_dir"] = args.output_dir
 
     # Latitude and longitude only override the location when both are supplied.
+    # The argparse --lat/--lon type already range-checks and truncates them.
     if args.lat is not None and args.lon is not None:
         overrides["latitude"] = args.lat
         overrides["longitude"] = args.lon
@@ -118,11 +124,22 @@ def main(argv: list[str] | None = None) -> int:
     if overrides:
         settings = replace_settings(settings, **overrides)
 
+    # Validate --port with range check.
+    port = args.port if args.port is not None else 8400
+    port = _validate.validate_port(port, fail_hard=True)
+
     if args.webserver:
-        run_webserver(settings, port=args.port)
+        run_webserver(settings, port=port)
         return 0
 
-    if args.webhook:
+    if args.webhook is not None:
+        # A URL on the command line wins; otherwise fall back to TRMNL_WEBHOOK_URL.
+        raw_webhook = args.webhook or settings.webhook_url
+        webhook_url = _validate.validate_url(raw_webhook, "--webhook", fail_hard=True)
+        if not webhook_url:
+            logging.error("No webhook URL provided; pass one to --webhook or set "
+                          "TRMNL_WEBHOOK_URL.")
+            return 1
         try:
             result = render_once(settings, xml_path=args.xml, obs_path=args.obs,
                                  use_cache=not args.no_cache)
@@ -136,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         image_path = settings.output_dir / result["filename"]
         try:
-            upload_to_webhook(image_path, args.webhook)
+            upload_to_webhook(image_path, webhook_url)
         except urllib.error.HTTPError as exc:
             logging.error("Webhook POST failed (HTTP %s): %s", exc.code, exc.reason)
             return 1

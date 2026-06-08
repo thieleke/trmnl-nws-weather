@@ -105,6 +105,14 @@ on the command line.
 uv run trmnl-nws-weather --webhook "https://usetrmnl.com/api/plugin_settings/<your-uuid>/image"
 ```
 
+You can also store the webhook URL in the environment/.env file as
+`TRMNL_WEBHOOK_URL`. Then `--webhook` needs no URL on the command line (a URL
+passed on the command line still overrides the environment value):
+
+```bash
+uv run trmnl-nws-weather --webhook
+```
+
 The output is a 2 bit, 800×480 PNG - well under TRMNL's 5 MB limit.
 To keep the panel current, run that command on a schedule (cron,
 Task Scheduler, systemd timer) - every 30 minutes is a good default. See the
@@ -158,7 +166,7 @@ PNG metadata so cache hits can report it without re-fetching.
 | `--time-format {12,24}` | Override the clock format |
 | `--output-dir PATH` | Override the images directory |
 | `--no-cache` | Always render, ignoring any recent cached image |
-| `--webhook URL` | Render, then POST the image to a TRMNL webhook URL, and exit |
+| `--webhook [URL]` | Render, then POST the image to a TRMNL webhook URL, and exit. The URL may be omitted when `TRMNL_WEBHOOK_URL` is set |
 | `--webserver` | Serve the latest image over HTTP at `/weather` |
 | `--port INT` | Port for `--webserver` (default: 8400) |
 | `-v`, `--verbose` | Debug logging |
@@ -172,22 +180,26 @@ documented [`.env.example`](.env.example) (configured for a second city, Boring,
 Oregon) to `.env` and edit it. CLI flags override env vars, which override the
 defaults.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `TRMNL_LATITUDE` | `40.0404` | Forecast point latitude |
-| `TRMNL_LONGITUDE` | `-76.3042` | Forecast point longitude |
-| `TRMNL_UNITS` | `imperial` | `imperial` or `metric` |
-| `TRMNL_THEME` | `light` | `light` or `dark` |
-| `TRMNL_TIME_FORMAT` | `12` | `12` or `24` hour clock |
-| `TRMNL_REFRESH_SECONDS` | `1800` | Re-render interval |
-| `TRMNL_GRAPH_WINDOW_HOURS` | `18` | Temperature graph time span |
-| `TRMNL_GRAPH_NOW_POSITION` | `0.0` | "Now" position in the graph (0 = left) |
-| `TRMNL_FORECAST_HOURS` | `6` | Columns in the forecast strip |
-| `TRMNL_CACHE_SECONDS` | `900` | Cache window for same-coordinate requests |
-| `TRMNL_CLEANUP_AGE_SECONDS` | `21600` | Delete generated PNGs older than this |
-| `TRMNL_OUTPUT_DIR` | `images` | Output directory |
-| `TRMNL_AQI_PROVIDER` | `open-meteo` | AQI source: `open-meteo` or `none` |
-| `TRMNL_AQI_URL` | *(empty)* | Custom AQI endpoint; overrides the provider |
+Values outside the listed range (or otherwise invalid) are rejected with a
+warning and the default is used instead.
+
+| Variable | Default | Range / allowed | Meaning |
+| --- | --- | --- | --- |
+| `TRMNL_LATITUDE` | `40.0404` | -90 to 90 | Forecast point latitude |
+| `TRMNL_LONGITUDE` | `-76.3042` | -180 to 180 | Forecast point longitude |
+| `TRMNL_UNITS` | `imperial` | `imperial` or `metric` | Unit system |
+| `TRMNL_THEME` | `light` | `light` or `dark` | Light/dark mode |
+| `TRMNL_TIME_FORMAT` | `12` | `12` or `24` | Clock format |
+| `TRMNL_REFRESH_SECONDS` | `1800` | 60 to 86400 | Re-render interval |
+| `TRMNL_GRAPH_WINDOW_HOURS` | `18` | 1 to 720 | Temperature graph time span |
+| `TRMNL_GRAPH_NOW_POSITION` | `0.0` | 0.0 to 1.0 | "Now" position in the graph (0 = left) |
+| `TRMNL_FORECAST_HOURS` | `6` | 1 to 240 | Columns in the forecast strip |
+| `TRMNL_CACHE_SECONDS` | `900` | 0 to 86400 | Cache window for same-coordinate requests |
+| `TRMNL_CLEANUP_AGE_SECONDS` | `21600` | 0 to 604800 | Delete generated PNGs older than this |
+| `TRMNL_OUTPUT_DIR` | `images` | any path | Output directory |
+| `TRMNL_AQI_PROVIDER` | `open-meteo` | `open-meteo` or `none` | AQI source |
+| `TRMNL_AQI_URL` | *(empty)* | `http`/`https` URL | Custom AQI endpoint; overrides the provider |
+| `TRMNL_WEBHOOK_URL` | *(empty)* | `http`/`https` URL | Default URL for `--webhook` when none is given on the CLI |
 
 ### Air Quality Index (AQI)
 
