@@ -18,7 +18,7 @@ from PIL import Image
 from PIL.Image import Resampling
 from PIL import ImageDraw
 
-from . import icons, units
+from . import icons, sun, units
 from .config import Settings
 from .models import CurrentObservation, Forecast, HourPoint, effective_sky
 from .theme import Palette, font
@@ -205,7 +205,8 @@ def _graph(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings) ->
         if h is lo:
             continue
         sky = effective_sky(h.sky, h.pop_percent)
-        glyph = icons.render(sky, round(icon_px * SUPERSAMPLING_FACTOR))
+        night = not sun.is_daytime(h.time, forecast.latitude, forecast.longitude)
+        glyph = icons.render(sky, round(icon_px * SUPERSAMPLING_FACTOR), night=night)
         c.paste_icon(glyph, round(x - icon_px / 2), round(y + 8), fill=c.p.muted)
 
     _peak_label(c, "HIGH", hi, x_of(hi.time), y_of(hi.temperature_f), settings, above=True)
@@ -281,7 +282,8 @@ def _current(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings,
 
     # --- Left half: icon, big temperature, condition label ---
     icon_size = 104
-    icon = icons.render(sky, round(icon_size * SUPERSAMPLING_FACTOR))
+    night = not sun.is_daytime(now, forecast.latitude, forecast.longitude)
+    icon = icons.render(sky, round(icon_size * SUPERSAMPLING_FACTOR), night=night)
     c.paste_icon(icon, 28, top + 6)
 
     temp_num = units.format_temp(temp_f, settings.units).replace("°", "")
@@ -306,7 +308,7 @@ def _current(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings,
     # --- Right half: 2x2 metric boxes ---
     aqi_val = str(observation.aqi) if observation and observation.aqi is not None else "--"
     boxes = {
-        (0, 0): ("AQI", aqi_val, "aqi"),
+        (0, 0): ("AQI", aqi_val + "   ", "aqi"),
         (1, 0): ("PRECIP CHANCE", _pop_text(cur), "droplet"),  # POP is forecast-only
         (0, 1): ("HUMIDITY", _pct(humidity), "humidity"),
         (1, 1): ("WIND", units.format_wind(wind, settings.units), "wind"),
@@ -364,7 +366,8 @@ def _forecast_strip(c: _Canvas, forecast: Forecast, now: datetime,
                fill=c.p.muted)
 
         sky = effective_sky(h.sky, h.pop_percent)
-        icon = icons.render(sky, round(30 * SUPERSAMPLING_FACTOR))
+        night = not sun.is_daytime(h.time, forecast.latitude, forecast.longitude)
+        icon = icons.render(sky, round(30 * SUPERSAMPLING_FACTOR), night=night)
         c.paste_icon(icon, round(cx - 38), top + 30)
         c.text((cx + 6, top + 46), units.format_temp(h.temperature_f, settings.units,
                with_unit=True), 20, bold=True, anchor="lm")

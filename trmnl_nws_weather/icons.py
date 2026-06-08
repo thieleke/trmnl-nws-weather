@@ -37,6 +37,19 @@ def _sun(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float, lw: int,
         draw.line((x0, y0, x1, y1), fill=255, width=lw)
 
 
+def _moon(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float) -> None:
+    """Draw a stylised crescent moon centred at ``(cx, cy)``.
+
+    The crescent is carved by subtracting an offset disc (drawn transparent) from
+    a full disc.  The moon is drawn before any cloud, so the carve only affects
+    the moon and a later cloud composites cleanly on top.
+    """
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+    # Subtract a disc shifted up and to the right, leaving a lower-left crescent.
+    ox, oy = r * 0.50, -r * 0.22
+    draw.ellipse((cx - r + ox, cy - r + oy, cx + r + ox, cy + r + oy), fill=0)
+
+
 def _cloud(draw: ImageDraw.ImageDraw, box: tuple[float, float, float, float]) -> None:
     """Draw a filled cloud within ``box``."""
     x0, y0, x1, y1 = box
@@ -121,16 +134,26 @@ def _fog(draw: ImageDraw.ImageDraw, size: int, lw: int) -> None:
         draw.line((s * 0.1 + inset, yy, s * 0.9 - inset, yy), fill=255, width=lw)
 
 
-def render(sky: Sky, size: int) -> Image.Image:
-    """Render ``sky`` as an ``L`` image (size×size); 255 = ink, 0 = transparent."""
+def render(sky: Sky, size: int, *, night: bool = False) -> Image.Image:
+    """Render ``sky`` as an ``L`` image (size×size); 255 = ink, 0 = transparent.
+
+    When ``night`` is true, the clear- and partly-clear-sky icons use a crescent
+    moon in place of the sun; the cloud and precipitation icons are unchanged.
+    """
     img, draw = _new(size)
     s = size * SUPERSAMPLING_FACTOR
     lw = max(2, round(s * 0.035))
 
     if sky is Sky.SUNNY:
-        _sun(draw, s * 0.5, s * 0.5, s * 0.24, lw)
+        if night:
+            _moon(draw, s * 0.5, s * 0.5, s * 0.26)
+        else:
+            _sun(draw, s * 0.5, s * 0.5, s * 0.24, lw)
     elif sky is Sky.PARTLY_CLOUDY:
-        _sun(draw, s * 0.66, s * 0.36, s * 0.17, lw)
+        if night:
+            _moon(draw, s * 0.66, s * 0.35, s * 0.19)
+        else:
+            _sun(draw, s * 0.66, s * 0.36, s * 0.17, lw)
         _cloud(draw, (s * 0.12, s * 0.40, s * 0.82, s * 0.80))
     elif sky is Sky.CLOUDY:
         _cloud(draw, (s * 0.1, s * 0.28, s * 0.9, s * 0.72))

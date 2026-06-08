@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -259,7 +260,8 @@ def upload_to_webhook(image_path: Path, webhook_url: str) -> None:
     if file_size > 5 * 1024 * 1024:
         raise ValueError(f"Image too large ({file_size} bytes), maximum is 5 MB")
 
-    log.info("Uploading %s (%d bytes) to %s", image_path.name, file_size, webhook_url)
+    log.info("Uploading %s (%d bytes) to %s", image_path.name, file_size, 
+             re.sub(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', '<guid>', webhook_url))
 
     with open(image_path, "rb") as f:
         data = f.read()
