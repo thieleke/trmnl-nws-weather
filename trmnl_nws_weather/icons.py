@@ -11,6 +11,7 @@ caller composites them onto the page in the theme's foreground colour.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 from PIL import Image, ImageDraw
 
@@ -134,11 +135,15 @@ def _fog(draw: ImageDraw.ImageDraw, size: int, lw: int) -> None:
         draw.line((s * 0.1 + inset, yy, s * 0.9 - inset, yy), fill=255, width=lw)
 
 
+@lru_cache(maxsize=256)
 def render(sky: Sky, size: int, *, night: bool = False) -> Image.Image:
     """Render ``sky`` as an ``L`` image (size×size); 255 = ink, 0 = transparent.
 
     When ``night`` is true, the clear- and partly-clear-sky icons use a crescent
     moon in place of the sun; the cloud and precipitation icons are unchanged.
+
+    The result is cached on ``(sky, size, night)``.  Callers composite it as a
+    paste mask and never mutate it, so a shared instance is safe to reuse.
     """
     img, draw = _new(size)
     s = size * SUPERSAMPLING_FACTOR
@@ -180,8 +185,13 @@ def render(sky: Sky, size: int, *, night: bool = False) -> Image.Image:
 
 # --- Small glyphs for the metric boxes ------------------------------------
 
+@lru_cache(maxsize=64)
 def glyph(name: str, size: int) -> Image.Image:
-    """Render a small labelled-box glyph (droplet, humidity, wind, aqi)."""
+    """Render a small labelled-box glyph (droplet, humidity, wind, aqi).
+
+    Cached on ``(name, size)``; the result is used as a paste mask and never
+    mutated, so a shared instance is safe to reuse.
+    """
     img, draw = _new(size)
     s = size * SUPERSAMPLING_FACTOR
     lw = max(2, round(s * 0.06))

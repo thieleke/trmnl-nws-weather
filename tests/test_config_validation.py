@@ -220,6 +220,41 @@ class TestEnvEnum:
 
 
 # -----------------------------------------------------------------------
+# _env_bool
+# -----------------------------------------------------------------------
+
+
+class TestEnvBool:
+    """Tests for config._env_bool()."""
+
+    def setup_method(self):
+        _clear_env()
+
+    @pytest.mark.parametrize("raw", ["1", "true", "TRUE", "Yes", "on", "ON"])
+    def test_truthy_spellings(self, raw):
+        from trmnl_nws_weather.config import _env_bool
+        with patch.dict(os.environ, {"TRMNL_VAL": raw}):
+            assert _env_bool("TRMNL_VAL", False) is True
+
+    @pytest.mark.parametrize("raw", ["0", "false", "FALSE", "No", "off", ""])
+    def test_falsey_spellings(self, raw):
+        from trmnl_nws_weather.config import _env_bool
+        with patch.dict(os.environ, {"TRMNL_VAL": raw}):
+            assert _env_bool("TRMNL_VAL", True) is False
+
+    def test_uses_default_when_not_set(self):
+        from trmnl_nws_weather.config import _env_bool
+        assert _env_bool("TRMNL_MISSING", True) is True
+        assert _env_bool("TRMNL_MISSING", False) is False
+
+    def test_invalid_returns_default(self):
+        from trmnl_nws_weather.config import _env_bool
+        with patch.dict(os.environ, {"TRMNL_VAL": "maybe"}):
+            assert _env_bool("TRMNL_VAL", True) is True
+            assert _env_bool("TRMNL_VAL", False) is False
+
+
+# -----------------------------------------------------------------------
 # Settings integration
 # -----------------------------------------------------------------------
 
@@ -262,3 +297,44 @@ class TestSettingsValidation:
             importlib.reload(config_mod)
             settings = config_mod.Settings()
         assert settings.webhook_url == "https://hooks.example.com/post"
+
+
+# -----------------------------------------------------------------------
+# Web server settings (bind address + proxy-header trust)
+# -----------------------------------------------------------------------
+
+
+class TestWebServerSettings:
+    """Integration tests for the TRMNL_HOST_ADDRESS / TRMNL_TRUST_PROXY_HEADERS
+    settings introduced for the --webserver path."""
+
+    def setup_method(self):
+        _clear_env()
+
+    def test_host_address_defaults_to_all_interfaces(self):
+        import importlib
+        import trmnl_nws_weather.config as config_mod
+        importlib.reload(config_mod)
+        assert config_mod.Settings().bind_address == "0.0.0.0"
+
+    def test_host_address_read_from_env(self):
+        import importlib
+        import trmnl_nws_weather.config as config_mod
+        with patch.dict(os.environ, {"TRMNL_HOST_ADDRESS": "127.0.0.1"}):
+            importlib.reload(config_mod)
+            settings = config_mod.Settings()
+        assert settings.bind_address == "127.0.0.1"
+
+    def test_trust_proxy_headers_defaults_false(self):
+        import importlib
+        import trmnl_nws_weather.config as config_mod
+        importlib.reload(config_mod)
+        assert config_mod.Settings().trust_proxy_headers is False
+
+    def test_trust_proxy_headers_read_from_env(self):
+        import importlib
+        import trmnl_nws_weather.config as config_mod
+        with patch.dict(os.environ, {"TRMNL_TRUST_PROXY_HEADERS": "true"}):
+            importlib.reload(config_mod)
+            settings = config_mod.Settings()
+        assert settings.trust_proxy_headers is True

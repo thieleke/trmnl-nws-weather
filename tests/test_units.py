@@ -25,11 +25,3 @@ def test_format_temp_missing():
 def test_format_wind():
     assert units.format_wind(8, Units.IMPERIAL) == "8 mph"
     assert units.format_wind(8, Units.METRIC) == "13 km/h"
-
-
-def test_compass():
-    assert units.degrees_to_compass(0) == "N"
-    assert units.degrees_to_compass(90) == "E"
-    assert units.degrees_to_compass(180) == "S"
-    assert units.degrees_to_compass(270) == "W"
-    assert units.degrees_to_compass(None) == ""

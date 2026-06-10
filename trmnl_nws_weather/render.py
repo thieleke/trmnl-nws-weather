@@ -387,7 +387,7 @@ def _current(c: _Canvas, forecast: Forecast, now: datetime, settings: Settings,
     c.paste_icon(icon, 28, top + 6)
 
     temp_num = units.format_temp(temp_f, settings.units).replace("°", "")
-    unit = "°C" if settings.units.value == "metric" else "°F"
+    unit = units.temp_unit_label(settings.units)
     tx = 158
     ty = top + 58
     c.text((tx, ty), temp_num, 90, bold=True, anchor="lm")

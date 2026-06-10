@@ -101,6 +101,15 @@ def test_find_cached_isolated_by_display_options(tmp_path):
     assert service.find_cached(tmp_path, "40.0404_-76.3042_800_480_2_l_i_24", now, 900) is None  # 24h
 
 
+def test_find_cached_ignores_future_dated(tmp_path):
+    # A file stamped in the future (e.g. after a backward clock correction) is
+    # not "fresh": the age must fall within [0, window], not just |age| <= window.
+    now = int(time.time())
+    tag = f"40.0404_-76.3042_{OG_OPTS}"
+    (tmp_path / f"img_{tag}_{now + 100}.png").write_bytes(b"x")
+    assert service.find_cached(tmp_path, tag, now, 900) is None
+
+
 def test_find_cached_picks_most_recent(tmp_path):
     now = int(time.time())
     tag = f"40.0404_-76.3042_{OG_OPTS}"
@@ -176,3 +185,50 @@ def test_timestamp_parsing():
     assert service._timestamp_of(
         Path("img_40.0404_-76.3042_800_480_2_l_i_12_1780590454.png")) == 1780590454
     assert service._timestamp_of(Path("not-an-image.png")) is None
+
+
+# --- Client IP extraction (proxy-header trust) ----------------------------
+
+class _FakeHandler:
+    """Minimal stand-in for BaseHTTPRequestHandler for _get_client_ip."""
+
+    def __init__(self, headers=None, peer="203.0.113.9"):
+        self.headers = headers or {}
+        self.client_address = (peer, 54321)
+
+
+def test_client_ip_ignores_proxy_headers_by_default():
+    # Spoofable headers must be ignored unless trust is explicitly enabled.
+    handler = _FakeHandler(headers={"X-Real-IP": "10.0.0.1",
+                                    "X-Forwarded-For": "10.0.0.2"})
+    assert service._get_client_ip(handler, trust_proxy_headers=False) == "203.0.113.9"
+
+
+def test_client_ip_prefers_x_real_ip_when_trusted():
+    handler = _FakeHandler(headers={"X-Real-IP": "10.0.0.1",
+                                    "X-Forwarded-For": "10.0.0.2, 10.0.0.3"})
+    assert service._get_client_ip(handler, trust_proxy_headers=True) == "10.0.0.1"
+
+
+def test_client_ip_uses_forwarded_for_first_entry_when_trusted():
+    handler = _FakeHandler(headers={"X-Forwarded-For": "10.0.0.2, 10.0.0.3"})
+    assert service._get_client_ip(handler, trust_proxy_headers=True) == "10.0.0.2"
+
+
+def test_client_ip_falls_back_to_peer_when_trusted_but_no_headers():
+    handler = _FakeHandler()
+    assert service._get_client_ip(handler, trust_proxy_headers=True) == "203.0.113.9"
+
+
+# --- Webhook URL scrubbing (GUID redaction in logs) -----------------------
+
+def test_guid_scrub_is_case_insensitive():
+    lower = "https://host/api/plugin_settings/0a1b2c3d-4e5f-6789-abcd-ef0123456789/image"
+    upper = "https://host/api/plugin_settings/0A1B2C3D-4E5F-6789-ABCD-EF0123456789/image"
+    assert service._GUID_RE.sub("<guid>", lower) == "https://host/api/plugin_settings/<guid>/image"
+    assert service._GUID_RE.sub("<guid>", upper) == "https://host/api/plugin_settings/<guid>/image"
+
+
+def test_webserver_cache_floor_is_positive():
+    # The web server never fetches upstream more often than this on a cache miss.
+    assert service.MIN_WEBSERVER_CACHE_SECONDS >= 1

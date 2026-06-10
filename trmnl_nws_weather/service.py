@@ -16,10 +16,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import urllib.request
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from typing import TypedDict
 
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
@@ -36,6 +39,26 @@ _DESCRIPTION_KEY = "Description"
 # across all coordinates/devices/settings.  Enforced before the age-based prune
 # so a runaway directory can never grow large enough to slow the per-tag globs.
 MAX_CACHED_IMAGES = 50_000
+
+# Floor on the cache window used by the web server, regardless of the configured
+# cache_seconds.  An unauthenticated GET /weather renders on a cache miss, which
+# fetches from weather.gov; this minimum bounds how often a flood of requests can
+# trigger those upstream fetches even when caching is otherwise disabled.
+MIN_WEBSERVER_CACHE_SECONDS = 60
+
+# GUID pattern (case-insensitive) used to scrub webhook URLs before logging.
+_GUID_RE = re.compile(
+    r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+    re.IGNORECASE,
+)
+
+
+class RenderResult(TypedDict):
+    """Result of a single render (or cache hit)."""
+
+    filename: str
+    cached: bool
+    description: str
 
 
 def _timestamp_of(path: Path) -> int | None:
@@ -64,7 +87,9 @@ def find_cached(output_dir: Path, cache_tag: str, now_ts: int,
     best: tuple[int, Path] | None = None
     for path in output_dir.glob(f"img_{cache_tag}_*.png"):
         ts = _timestamp_of(path)
-        if ts is None or abs(now_ts - ts) > window_seconds:
+        # A future-dated file (e.g. after a backward clock correction) is not
+        # "fresh"; require the age to be within [0, window_seconds].
+        if ts is None or not 0 <= now_ts - ts <= window_seconds:
             continue
         if best is None or ts > best[0]:
             best = (ts, path)
@@ -149,7 +174,7 @@ def _read_description(path: Path) -> str:
 
 
 def render_once(settings: Settings, *, xml_path: Path | None = None,
-                obs_path: Path | None = None, use_cache: bool = True) -> dict:
+                obs_path: Path | None = None, use_cache: bool = True) -> RenderResult:
     """Render (or serve from cache) a single image.
 
     Returns a result dict: ``{"filename", "cached", "description"}``.
@@ -225,70 +250,103 @@ def render_once(settings: Settings, *, xml_path: Path | None = None,
             "description": forecast.location_name}
 
 
-def _get_client_ip(handler: "BaseHTTPRequestHandler") -> str:
-    """Extract the client IP address from a request handler.
+def _get_client_ip(handler: "BaseHTTPRequestHandler", *,
+                   trust_proxy_headers: bool) -> str:
+    """Return the client IP address to log for a request.
 
-    Checks proxy headers in order of preference:
-    1. ``X-Real-IP`` - Set by many reverse proxies (nginx, HAProxy) as the
-       original client IP.  This takes priority as it is a single, trusted
-       value.
-    2. ``X-Forwarded-For`` - Comma-separated list of IPs through which the
-       request was proxied.  The first (leftmost) entry is the original client.
-    3. Falls back to the direct TCP connection peer address.
+    ``X-Real-IP`` / ``X-Forwarded-For`` are client-controlled unless a trusted
+    reverse proxy sets them, so they are only consulted when
+    ``trust_proxy_headers`` is enabled (``TRMNL_TRUST_PROXY_HEADERS``).
+    Otherwise — and as the fallback in either mode — the direct TCP peer address
+    is used.
     """
-    x_real_ip = handler.headers.get("X-Real-IP")
-    if x_real_ip:
-        return x_real_ip.strip()
+    if trust_proxy_headers:
+        x_real_ip = handler.headers.get("X-Real-IP")
+        if x_real_ip:
+            return x_real_ip.strip()
 
-    x_forwarded_for = handler.headers.get("X-Forwarded-For")
-    if x_forwarded_for:
-        # The first IP in the chain is the original client.
-        return x_forwarded_for.split(",")[0].strip()
+        x_forwarded_for = handler.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            # The first IP in the chain is the original client.
+            return x_forwarded_for.split(",")[0].strip()
 
     return handler.client_address[0]
 
 
 def run_webserver(settings: Settings, port: int) -> None:
     """Run a web server that serves the weather image at /weather."""
-    from http.server import HTTPServer
+    from http.server import ThreadingHTTPServer
+
+    # The cache window is floored so an unauthenticated flood of cache-miss
+    # requests cannot fetch from weather.gov more often than this.
+    cache_window = max(settings.cache_seconds, MIN_WEBSERVER_CACHE_SECONDS)
+    # Serialise the render-on-miss path: concurrent misses should produce a
+    # single fetch+render, with later waiters served the freshly-written file.
+    render_lock = threading.Lock()
 
     class WeatherHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            client_ip = _get_client_ip(self)
+            client_ip = _get_client_ip(
+                self, trust_proxy_headers=settings.trust_proxy_headers)
             log.info("Request %s from %s", self.path, client_ip)
-            if self.path == "/weather":
-                now_ts = int(time.time())
-                cached_path = find_cached(settings.output_dir, settings.cache_tag, now_ts, settings.cache_seconds)
+            if self.path != "/weather":
+                self.send_error(404, "Not Found")
+                return
 
+            path = self._resolve_image()
+            if path is not None:
+                self._serve_file(path)
+            else:
+                self.send_error(500, "Could not generate image")
+
+        def _resolve_image(self) -> Path | None:
+            """Return a fresh image path, rendering on a cache miss."""
+            now_ts = int(time.time())
+            cached_path = find_cached(settings.output_dir, settings.cache_tag,
+                                      now_ts, cache_window)
+            if cached_path is not None and cached_path.exists():
+                log.info("Serving cached image: %s", cached_path.name)
+                return cached_path
+
+            with render_lock:
+                # Re-check under the lock: another thread may have rendered while
+                # we waited, so we serve its result instead of rendering again.
+                now_ts = int(time.time())
+                cached_path = find_cached(settings.output_dir, settings.cache_tag,
+                                          now_ts, cache_window)
                 if cached_path is not None and cached_path.exists():
                     log.info("Serving cached image: %s", cached_path.name)
-                    self._serve_file(cached_path)
-                else:
-                    log.info("Cache miss, generating new image")
+                    return cached_path
+
+                log.info("Cache miss, generating new image")
+                try:
                     result = render_once(settings, use_cache=False)
-                    out_path = settings.output_dir / result["filename"]
-                    if out_path.exists():
-                        self._serve_file(out_path)
-                    else:
-                        self.send_error(404, "Image not found after generation")
-            else:
-                self.send_error(404, "Not Found")
+                except Exception:  # noqa: BLE001 - keep the server alive
+                    log.exception("Render failed for %s", self.path)
+                    return None
+                out_path = settings.output_dir / result["filename"]
+                return out_path if out_path.exists() else None
 
         def _serve_file(self, path: Path) -> None:
             try:
-                with open(path, "rb") as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-            except Exception as e:
+                content = path.read_bytes()
+                mtime = path.stat().st_mtime
+            except OSError as e:
+                # Detail goes to the server log only; the client gets a generic
+                # message so internal paths/state are never disclosed.
                 log.error("Error serving file %s: %s", path, e)
-                self.send_error(500, f"Internal Server Error: {e}")
+                self.send_error(500, "Internal Server Error")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", f"max-age={cache_window}")
+            self.send_header("Last-Modified", formatdate(mtime, usegmt=True))
+            self.end_headers()
+            self.wfile.write(content)
 
-    server = HTTPServer(("0.0.0.0", port), WeatherHandler)
-    log.info("Starting web server on port %d...", port)
+    server = ThreadingHTTPServer((settings.bind_address, port), WeatherHandler)
+    log.info("Starting web server on %s:%d...", settings.bind_address, port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -326,8 +384,8 @@ def upload_to_webhook(image_path: Path, webhook_url: str) -> None:
     if file_size > 5 * 1024 * 1024:
         raise ValueError(f"Image too large ({file_size} bytes), maximum is 5 MB")
 
-    log.info("Uploading %s (%d bytes) to %s", image_path.name, file_size, 
-             re.sub(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', '<guid>', webhook_url))
+    log.info("Uploading %s (%d bytes) to %s", image_path.name, file_size,
+             _GUID_RE.sub("<guid>", webhook_url))
 
     with open(image_path, "rb") as f:
         data = f.read()

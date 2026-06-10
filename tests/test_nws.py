@@ -34,40 +34,48 @@ def test_current_and_window(sample_forecast):
     assert window == fc.hours[:6]
 
 
+def test_times_property_matches_hours_and_is_cached(sample_forecast):
+    fc = sample_forecast
+    times = fc.times
+    assert times == [h.time for h in fc.hours]
+    # The list is built once and reused (cached) on subsequent access.
+    assert fc.times is times
+
+
 def test_thunderstorm_classification(sample_forecast):
     # Hour index 8 in the sample carries a thunderstorms weather-type.
     assert any(h.sky is Sky.THUNDERSTORM for h in sample_forecast.hours)
 
 
-def test_precip_label_uses_weather_type(sample_forecast):
-    # Hours without a forecast weather-type fall back to the generic label.
+def test_precip_type_uses_weather_type(sample_forecast):
+    # Hours without a forecast weather-type have no precipitation type.
     no_type = next(h for h in sample_forecast.hours if not h.weather_types)
-    assert no_type.precip_label == "Precip"
+    assert no_type.precip_type is None
 
     # Hours with rain (and no thunderstorm) report "Rain".
     rainy = next(h for h in sample_forecast.hours
                  if h.weather_types == ["rain"])
-    assert rainy.precip_label == "Rain"
+    assert rainy.precip_type == "Rain"
 
     # Thunderstorm hours are a distinct category, even with rain listed too.
     storm = next(h for h in sample_forecast.hours
                  if "thunderstorms" in [t.lower() for t in h.weather_types])
-    assert storm.precip_label == "T'Storm"
+    assert storm.precip_type == "T'Storm"
 
 
-def test_precip_label_types():
+def test_precip_type_types():
     from trmnl_nws_weather.models import HourPoint
     from datetime import datetime
 
-    def label(*types: str) -> str:
-        return HourPoint(time=datetime(2026, 1, 1), weather_types=list(types)).precip_label
+    def ptype(*types: str) -> str | None:
+        return HourPoint(time=datetime(2026, 1, 1), weather_types=list(types)).precip_type
 
-    assert label("thunderstorms", "rain") == "T'Storm"  # storms outrank rain
-    assert label("snow") == "Snow"
-    assert label("sleet") == "Sleet"
-    assert label("freezing rain") == "Ice"  # "freezing" wins over "rain"
-    assert label("rain") == "Rain"
-    assert label() == "Precip"
+    assert ptype() is None
+    assert ptype("thunderstorms", "rain") == "T'Storm"  # storms outrank rain
+    assert ptype("snow") == "Snow"
+    assert ptype("sleet") == "Sleet"
+    assert ptype("freezing rain") == "Ice"  # "freezing" wins over "rain"
+    assert ptype("rain") == "Rain"
 
 
 def test_precip_type_none_when_unspecified():

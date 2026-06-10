@@ -165,7 +165,16 @@ uv run trmnl-nws-weather
 
 # Or serve the latest image over HTTP at /weather (default port 8400):
 uv run trmnl-nws-weather --webserver --port 8080
+
+# Bind to localhost only (e.g. behind a reverse proxy):
+uv run trmnl-nws-weather --webserver --host 127.0.0.1 --port 8080
 ```
+
+The server is multi-threaded and, on a cache miss, renders a fresh image
+(fetching from weather.gov) no more often than once per 60 seconds even if
+`TRMNL_CACHE_SECONDS` is lower. Responses carry `Cache-Control`/`Last-Modified`
+headers. It binds to all interfaces (`0.0.0.0`) by default; set `--host` /
+`TRMNL_HOST_ADDRESS` to restrict it.
 
 The service runs forever; stop with `Ctrl+C`. A transient fetch error is logged
 and retried next interval — the loop does not exit. (The webhook method in 4a is
@@ -211,6 +220,7 @@ uv run trmnl-nws-weather --once --output-dir /path/to/out
 | `--no-cache` | Always render, ignoring any recent cached image |
 | `--webhook [URL]` | POST the generated image to a webhook URL and exit; the URL may be omitted when `TRMNL_WEBHOOK_URL` is set |
 | `--webserver` | Run a web server to serve the weather image |
+| `--host ADDR` | Address the web server binds to, overriding `TRMNL_HOST_ADDRESS` (default `0.0.0.0` = all interfaces; `127.0.0.1` = localhost only) |
 | `--port INT` | Port for the web server (default: 8400) |
 | `-v`, `--verbose` | Enable debug logging |
 
@@ -244,6 +254,8 @@ warning and the default is used instead.
 | `TRMNL_AQI_PROVIDER` | `open-meteo` | `open-meteo` or `none` | AQI source: `open-meteo` (free, no key) or `none` |
 | `TRMNL_AQI_URL` | *(empty)* | `http`/`https` URL | Custom `{"aqi": N}` endpoint; overrides the provider |
 | `TRMNL_WEBHOOK_URL` | *(empty)* | `http`/`https` URL | Default URL for `--webhook` when none is given on the CLI |
+| `TRMNL_HOST_ADDRESS` | `0.0.0.0` | any host/IP | Web server bind address (`--webserver`); `0.0.0.0` = all interfaces, `127.0.0.1` = localhost only |
+| `TRMNL_TRUST_PROXY_HEADERS` | `false` | `true` or `false` | Trust `X-Real-IP`/`X-Forwarded-For` for client-IP logging; enable only behind a trusted reverse proxy |
 
 | CLI flag | Purpose |
 | --- | --- |
@@ -260,6 +272,9 @@ warning and the default is used instead.
 | `--bit-depth {1,2,4,8}` | Monochrome grey-ramp depth |
 | `--output-dir PATH` | Override output directory |
 | `--no-cache` | Always render, ignoring any recent cached image |
+| `--webserver` | Run a web server serving the image at `/weather` |
+| `--host ADDR` | Web server bind address; overrides `TRMNL_HOST_ADDRESS` |
+| `--port INT` | Web server port (default 8400) |
 | `-v`, `--verbose` | Debug logging |
 
 **Change the location** (example — Denver, CO):

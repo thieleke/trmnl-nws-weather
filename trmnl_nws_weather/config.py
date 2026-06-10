@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from pathlib import Path
+from typing import TypeVar
 
 from dotenv import load_dotenv
 
@@ -30,6 +31,8 @@ from .utils import TimeFormat  # noqa: PLC0414
 load_dotenv()  # Reads variables from the .env file into the environment, so they can be picked up by Settings
 
 log = logging.getLogger("trmnl_nws_weather")
+
+_EnumT = TypeVar("_EnumT", bound=Enum)
 
 
 def _format_coordinate(value: float) -> str:
@@ -80,6 +83,29 @@ DEVICE_SPECS: dict[Device, tuple[int, int, int]] = {
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
+
+
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off", ""})
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    """Read a boolean environment variable.
+
+    Accepts the usual truthy/falsey spellings (case-insensitive).  Returns
+    *default* when the variable is unset or unrecognised (after a warning).
+    """
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    log.warning("%s value %r is not a valid boolean; falling back to default (%s)",
+                key, raw, default)
+    return default
 
 
 def _env_url(key: str, default: str) -> str:
@@ -173,14 +199,14 @@ def _env_device(key: str) -> Device | None:
         return None
 
 
-def _env_enum(key: str, enum_class: type[Enum], default: Enum) -> Enum:
+def _env_enum(key: str, enum_class: type[_EnumT], default: _EnumT) -> _EnumT:
     """Read and validate an enum environment variable.
 
     Comparison is case-insensitive.  Returns *default* on invalid input.
     """
     raw = _env(key, default.value)
     try:
-        return enum_class(raw.lower())  # type: ignore[call-arg]
+        return enum_class(raw.lower())
     except ValueError:
         valid = ", ".join(member.value for member in enum_class)
         log.warning("%s value %r is not valid (allowed: %s); "
@@ -222,6 +248,13 @@ DEFAULT_AQI_PROVIDER = "open-meteo"
 DEFAULT_AQI_URL = ""
 # Default webhook URL for --webhook; empty means one must be given on the CLI.
 DEFAULT_WEBHOOK_URL = ""
+# Web server bind address.  Defaults to all interfaces (LAN appliance); set to
+# 127.0.0.1 to restrict to localhost (e.g. when fronted by a reverse proxy).
+DEFAULT_BIND_ADDRESS = "0.0.0.0"
+# Whether to trust X-Real-IP / X-Forwarded-For for client-IP logging.  These
+# headers are client-controlled unless set by a trusted reverse proxy, so they
+# are ignored by default and the direct peer address is logged instead.
+DEFAULT_TRUST_PROXY_HEADERS = False
 
 # User-Agent strings for outgoing HTTP requests.
 NWS_USER_AGENT = "trmnl-nws-weather/0.1"
@@ -240,13 +273,13 @@ class Settings:
         default_factory=lambda: _env_coordinate(
             "TRMNL_LONGITUDE", -180.0, 180.0, DEFAULT_LONGITUDE)
     )
-    units: Units = field(  # type: ignore[assignment]
+    units: Units = field(
         default_factory=lambda: _env_enum("TRMNL_UNITS", Units, DEFAULT_UNITS)
     )
-    theme: Theme = field(  # type: ignore[assignment]
+    theme: Theme = field(
         default_factory=lambda: _env_enum("TRMNL_THEME", Theme, DEFAULT_THEME)
     )
-    time_format: TimeFormat = field(  # type: ignore[assignment]
+    time_format: TimeFormat = field(
         default_factory=lambda: _env_enum("TRMNL_TIME_FORMAT", TimeFormat, DEFAULT_TIME_FORMAT)
     )
     # Output panel pixel dimensions.  The 800x480 layout is scaled to fit; a
@@ -272,16 +305,6 @@ class Settings:
     device: Device | None = field(
         default_factory=lambda: _env_device("TRMNL_DEVICE")
     )
-
-    def __post_init__(self) -> None:
-        # A device preset is a shortcut for a specific panel; applying it here
-        # means it wins over width/height/bit_depth regardless of where those
-        # came from (env or CLI).  ``frozen`` requires object.__setattr__.
-        if self.device is not None:
-            width, height, bit_depth = DEVICE_SPECS[self.device]
-            object.__setattr__(self, "width", width)
-            object.__setattr__(self, "height", height)
-            object.__setattr__(self, "bit_depth", bit_depth)
     # How often the service re-fetches the forecast and re-renders, in seconds.
     refresh_seconds: int = field(
         default_factory=lambda: _env_int(
@@ -339,6 +362,25 @@ class Settings:
     webhook_url: str = field(
         default_factory=lambda: _env_url("TRMNL_WEBHOOK_URL", DEFAULT_WEBHOOK_URL)
     )
+    # Web server bind address and whether to trust proxy-supplied client-IP
+    # headers (see the DEFAULT_* notes above).
+    bind_address: str = field(
+        default_factory=lambda: _env("TRMNL_HOST_ADDRESS", DEFAULT_BIND_ADDRESS)
+    )
+    trust_proxy_headers: bool = field(
+        default_factory=lambda: _env_bool("TRMNL_TRUST_PROXY_HEADERS",
+                                          DEFAULT_TRUST_PROXY_HEADERS)
+    )
+
+    def __post_init__(self) -> None:
+        # A device preset is a shortcut for a specific panel; applying it here
+        # means it wins over width/height/bit_depth regardless of where those
+        # came from (env or CLI).  ``frozen`` requires object.__setattr__.
+        if self.device is not None:
+            width, height, bit_depth = DEVICE_SPECS[self.device]
+            object.__setattr__(self, "width", width)
+            object.__setattr__(self, "height", height)
+            object.__setattr__(self, "bit_depth", bit_depth)
 
     @property
     def coord_tag(self) -> str:

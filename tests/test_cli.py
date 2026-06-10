@@ -48,6 +48,32 @@ def test_parser_accepts_lat_lon():
     assert args.lon == -65.4321
 
 
+def test_host_defaults_to_none():
+    args = _build_parser().parse_args([])
+    assert args.host is None
+
+
+def test_parser_accepts_host():
+    args = _build_parser().parse_args(["--webserver", "--host", "127.0.0.1"])
+    assert args.host == "127.0.0.1"
+
+
+def test_host_overrides_bind_address(monkeypatch):
+    # --host should reach run_webserver via Settings.bind_address.
+    from trmnl_nws_weather import __main__ as cli
+
+    captured = {}
+
+    def fake_run_webserver(settings, port):
+        captured["bind_address"] = settings.bind_address
+        captured["port"] = port
+
+    monkeypatch.setattr(cli, "run_webserver", fake_run_webserver)
+    rc = cli.main(["--webserver", "--host", "127.0.0.1", "--port", "9999"])
+    assert rc == 0
+    assert captured == {"bind_address": "127.0.0.1", "port": 9999}
+
+
 def test_url_coordinates_padded_to_four_places():
     from dataclasses import replace
     from trmnl_nws_weather.config import Settings, _format_coordinate

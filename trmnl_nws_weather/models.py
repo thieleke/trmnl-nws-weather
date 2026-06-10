@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+from .utils import any_match
+
 
 class Sky(str, Enum):
     """Coarse weather state used to pick a display icon and label.
@@ -33,18 +35,21 @@ class Sky(str, Enum):
 
     @property
     def label(self) -> str:
-        return {
-            Sky.SUNNY: "Sunny",
-            Sky.PARTLY_CLOUDY: "Partly Cloudy",
-            Sky.CLOUDY: "Cloudy",
-            Sky.WINDY: "Windy",
-            Sky.RAIN: "Rain",
-            Sky.SNOW: "Snow",
-            Sky.SLEET: "Sleet",
-            Sky.ICE: "Ice",
-            Sky.FOG: "Fog",
-            Sky.THUNDERSTORM: "Thunderstorms",
-        }[self]
+        return _SKY_LABELS[self]
+
+
+_SKY_LABELS: dict[Sky, str] = {
+    Sky.SUNNY: "Sunny",
+    Sky.PARTLY_CLOUDY: "Partly Cloudy",
+    Sky.CLOUDY: "Cloudy",
+    Sky.WINDY: "Windy",
+    Sky.RAIN: "Rain",
+    Sky.SNOW: "Snow",
+    Sky.SLEET: "Sleet",
+    Sky.ICE: "Ice",
+    Sky.FOG: "Fog",
+    Sky.THUNDERSTORM: "Thunderstorms",
+}
 
 
 # Below this precipitation chance, an unlikely rain/thunderstorm is shown as
@@ -93,8 +98,6 @@ class HourPoint:
         the feed lists no precipitation type for the hour (callers can then show
         a generic indicator instead of a word).
         """
-        from .utils import any_match
-
         types = [t.lower() for t in self.weather_types]
 
         # Thunderstorms outrank rain: they are a distinct, more hazardous type
@@ -113,11 +116,6 @@ class HourPoint:
         if self.weather_types:
             return self.weather_types[0].strip().title()
         return None
-
-    @property
-    def precip_label(self) -> str:
-        """Precipitation-type word, falling back to the generic "Precip"."""
-        return self.precip_type or "Precip"
 
 
 @dataclass(slots=True)
@@ -151,13 +149,24 @@ class Forecast:
     longitude: float
     generated_at: datetime
     hours: list[HourPoint]
+    # Lazily-built, cached list of hour timestamps for bisection.  Rebuilt on
+    # first use (and never invalidated, as hours is set once at parse time).
+    _times: list[datetime] | None = field(default=None, init=False, repr=False,
+                                           compare=False)
+
+    @property
+    def times(self) -> list[datetime]:
+        """The hours' timestamps, cached for repeated bisection."""
+        if self._times is None:
+            self._times = [h.time for h in self.hours]
+        return self._times
 
     def current(self, now: datetime) -> HourPoint:
         """Return the hour nearest to ``now`` (the "current conditions")."""
         # Find the insertion point for 'now' in the sorted list of hours
-        times = [h.time for h in self.hours]
+        times = self.times
         idx = bisect.bisect_left(times, now)
-        
+
         if idx == 0:
             return self.hours[0]
         if idx == len(self.hours):

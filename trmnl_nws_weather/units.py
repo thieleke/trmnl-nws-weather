@@ -59,17 +59,3 @@ def format_wind(value_mph: float | None, units: Units) -> str:
     if converted is None:
         return "--"
     return f"{round(converted)} {wind_unit_label(units)}"
-
-
-_COMPASS = [
-    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
-]
-
-
-def degrees_to_compass(degrees: float | None) -> str:
-    """Convert a wind bearing in degrees-true to a 16-point compass label."""
-    if degrees is None:
-        return ""
-    index = int((degrees % 360) / 22.5 + 0.5) % 16
-    return _COMPASS[index]

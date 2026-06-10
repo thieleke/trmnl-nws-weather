@@ -155,6 +155,9 @@ uv run trmnl-nws-weather
 
 # Serve the latest image over HTTP (default port 8400; --port to change):
 uv run trmnl-nws-weather --webserver --port 8080
+
+# Bind the web server to localhost only (e.g. behind a reverse proxy):
+uv run trmnl-nws-weather --webserver --host 127.0.0.1 --port 8080
 ```
 
 > For step-by-step operational instructions (setup, generating a PNG, running
@@ -211,6 +214,7 @@ slow the cache lookup), then anything older than `TRMNL_CLEANUP_AGE_SECONDS`
 | `--no-cache` | Always render, ignoring any recent cached image |
 | `--webhook [URL]` | Render, then POST the image to a TRMNL webhook URL, and exit. The URL may be omitted when `TRMNL_WEBHOOK_URL` is set |
 | `--webserver` | Serve the latest image over HTTP at `/weather` |
+| `--host ADDR` | Bind address for `--webserver`; overrides `TRMNL_HOST_ADDRESS` (default `0.0.0.0` = all interfaces; `127.0.0.1` = localhost only) |
 | `--port INT` | Port for `--webserver` (default: 8400) |
 | `-v`, `--verbose` | Debug logging |
 
@@ -247,6 +251,8 @@ warning and the default is used instead.
 | `TRMNL_AQI_PROVIDER` | `open-meteo` | `open-meteo` or `none` | AQI source |
 | `TRMNL_AQI_URL` | *(empty)* | `http`/`https` URL | Custom AQI endpoint; overrides the provider |
 | `TRMNL_WEBHOOK_URL` | *(empty)* | `http`/`https` URL | Default URL for `--webhook` when none is given on the CLI |
+| `TRMNL_HOST_ADDRESS` | `0.0.0.0` | any host/IP | Web server bind address for `--webserver` (`0.0.0.0` = all interfaces, `127.0.0.1` = localhost only) |
+| `TRMNL_TRUST_PROXY_HEADERS` | `false` | `true` or `false` | Trust `X-Real-IP`/`X-Forwarded-For` for client-IP logging; enable only behind a trusted reverse proxy |
 
 ### Air Quality Index (AQI)
 

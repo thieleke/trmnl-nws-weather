@@ -102,6 +102,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              "the URL may be omitted if TRMNL_WEBHOOK_URL is set")
     parser.add_argument("--webserver", action="store_true",
                         help="run a web server to serve the weather image")
+    parser.add_argument("--host", type=str, default=None,
+                        help="address the web server binds to, overriding "
+                             "TRMNL_HOST_ADDRESS (default: 0.0.0.0 = all "
+                             "interfaces; use 127.0.0.1 for localhost only)")
     parser.add_argument("--port", type=int, default=None,
                         help="port for the web server (default: 8400)")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -125,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
         overrides["time_format"] = TimeFormat(args.time_format)
     if args.output_dir:
         overrides["output_dir"] = args.output_dir
+    if args.host is not None:
+        overrides["bind_address"] = args.host
     # A device preset expands to a fixed width/height/bit_depth and overrides
     # the individual flags (applied in Settings.__post_init__).
     if args.device:
